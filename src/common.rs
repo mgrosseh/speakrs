@@ -1,6 +1,4 @@
-use std::{fmt::Display, sync::{Arc, Mutex, mpsc}, thread};
-
-use crate::common::IP::IPv4;
+use std::{collections::BTreeMap, fmt::Display, net::{IpAddr, Ipv4Addr}, sync::{Arc, Mutex, mpsc}, thread, time::SystemTime};
 
 pub const VERSION: &str = "v0.1";
 pub const PROG: &str = "speakrs";
@@ -53,52 +51,9 @@ impl Display for Port {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum IP {
-    IPv4(u8, u8, u8, u8),
-    #[allow(unused)]
-    IPv6(u16, u16, u16, u16, u16, u16, u16, u16),
-}
-
-impl IP {
-    /// Create an IP from given string (using format n.n.n.n where each n is a u8)
-    ///
-    /// # Panics
-    /// 
-    /// The `from_str_v4` will panic if string is not a valid ip
-    pub(crate) fn from_str_v4(string: &str) -> Self {
-        let mut split = string.split('.');
-        let a = split
-            .next().expect("Expecting first part of ip.")
-            .parse::<u8>().expect("Expecting valid u8.");
-        let b = split
-            .next().expect("Expecting second part of ip.")
-            .parse::<u8>().expect("Expecting valid u8.");
-        let c = split
-            .next().expect("Expecting third part of ip.")
-            .parse::<u8>().expect("Expecting valid u8.");
-        let d = split
-            .next().expect("Expecting forth part of ip.")
-            .parse::<u8>().expect("Expecting valid u8.");
-        Self::IPv4(a, b, c, d)
-    }
-}
-impl Display for IP {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IPv4(a, b, c, d) => {
-                write!(f, "{a}.{b}.{c}.{d}")
-            }
-            _ => {
-                todo!("IPv6 not implemented yet.")
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct Arguments {
     pub mode: Mode,
-    pub server_ip: IP,
+    pub server_ip: IpAddr,
     pub server_tcp_port: Port,
     pub server_udp_port: Port,
     pub verbose: bool,
@@ -109,7 +64,7 @@ pub struct Arguments {
 impl Arguments {
     pub fn parse(args: &[String]) -> Option<Self> {
         let mut mode: Option<Mode> = Option::None;
-        let mut server_ip: Option<IP> = Option::None;
+        let mut server_ip: Option<IpAddr> = Option::None;
         let mut server_tcp_port: Option<Port> = Option::None;
         let mut server_udp_port: Option<Port> = Option::None;
         let mut verbose: Option<bool> = Option::None;
@@ -138,7 +93,7 @@ impl Arguments {
                 "--verbose" | "-v" => verbose = Option::Some(true),
                 x if x.starts_with("--udp=") => server_udp_port = Option::Some(Port::from_str(x.strip_prefix("--udp=").unwrap())),
                 x if x.starts_with("--tcp=") => server_tcp_port = Option::Some(Port::from_str(x.strip_prefix("--tcp=").unwrap())),
-                x if x.starts_with("--ip=") => server_ip = Option::Some(IP::from_str_v4(x.strip_prefix("--ip=").unwrap())),
+                x if x.starts_with("--ip=") => server_ip = Option::Some(x.strip_prefix("--ip=").unwrap().parse().expect("")),
                 x if x.starts_with("-") => {
                     err_unknown_arg(x);
                     return Option::None;
@@ -152,7 +107,7 @@ impl Arguments {
 
         Option::Some(Self {
             mode: mode.unwrap_or(Mode::Client),
-            server_ip: server_ip.unwrap_or(IP::from_str_v4("127.0.0.1")),
+            server_ip: server_ip.unwrap_or(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
             server_tcp_port: server_tcp_port.unwrap_or(Port::new(7878)),
             server_udp_port: server_udp_port.unwrap_or(Port::new(7879)),
             verbose: verbose.unwrap_or(false),
@@ -310,5 +265,151 @@ impl Drop for ThreadPool {
             }
             worker.thread.join().unwrap(); // NOTE: if unwrap panics, while drop is called in panic, all other cleanup is skipped (bad)
         }
+    }
+}
+
+// ======================================
+// => server struct
+// ======================================
+
+struct Server {
+    channels: BTreeMap<ChannelId, TextChannel>,
+    users: BTreeMap<UserId, User>,
+}
+
+impl Server {
+
+    fn new() -> Self {
+        let channels = BTreeMap::new();
+        let users = BTreeMap::new();
+        Self {
+            channels,
+            users,
+        }
+    }
+
+    fn load() -> Self {
+        todo!()
+    }
+
+    fn test(&mut self) {
+        //self.channels.get_mut(&ChannelId::from(0));
+    }
+
+    pub fn load_user(&mut self, id: UserId, name: String) -> UserId {
+        let user = User::new(id, name);
+        self.users.insert(id, user);
+        id
+    }
+
+    pub fn add_user(&mut self, name: String) -> UserId {
+        let id = *self.users.keys().max().unwrap_or(&UserId::default());
+        self.load_user(id, name)
+    }
+
+
+    pub fn load_channel(&mut self, id: ChannelId, name: String, desc: String) -> ChannelId {
+        let channel = TextChannel::new(id, name, desc);
+        self.channels.insert(id, channel);
+        id
+    }
+
+    pub fn add_channel(&mut self, name: String, desc: String) -> ChannelId {
+        let id = *self.channels.keys().max().unwrap_or(&ChannelId::default());
+        self.load_channel(id, name, desc)
+    }
+
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+struct ChannelId {
+    id: u8,
+}
+impl ChannelId {
+    fn from(id: u8) -> Self {
+        Self {
+            id
+        }
+    }
+}
+struct TextChannel {
+    id: ChannelId,
+    name: String,
+    desc: String,
+    messages: BTreeMap<MessageId, Message>,
+}
+
+impl TextChannel {
+    fn new(id: ChannelId, name: String, desc: String) -> Self {
+        let messages = BTreeMap::new();
+
+        Self {
+            id,
+            name,
+            desc,
+            messages
+        }
+    }
+
+    pub fn load_message(&mut self, id: MessageId, timestamp: SystemTime, user: UserId, content: String) -> MessageId {
+        let message = Message::new(id, timestamp, user, content);
+        self.messages.insert(id, message);
+        id
+    }
+
+    pub fn add_message(&mut self, timestamp: Option<SystemTime>, user: UserId, content: String) -> MessageId {
+        let id = *self.messages.keys().max().unwrap_or(&MessageId::default());
+        let timestamp = timestamp.unwrap_or(SystemTime::now());
+        self.load_message(id, timestamp, user, content)
+    }
+
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+struct UserId {
+    id: u8,
+}
+impl UserId {
+    fn from(id: u8) -> Self {
+        Self {
+            id
+        }
+    }
+}
+struct User {
+    id: UserId,
+    name: String,
+}
+impl User {
+    fn new(id: UserId, name: String) -> Self {
+        Self { id, name }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+struct MessageId {
+    id: u32,
+}
+impl MessageId {
+    fn from(id: u32) -> Self {
+        Self {
+            id
+        }
+    }
+}
+struct Message {
+    id: MessageId,
+    timestamp: SystemTime,
+    user: UserId,
+    content: String,
+}
+impl Message {
+    fn new(id: MessageId, timestamp: SystemTime, user: UserId, content: String) -> Self {
+        Self {
+            id,
+            timestamp,
+            user,
+            content
+        }       
     }
 }

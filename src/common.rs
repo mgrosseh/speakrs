@@ -1,7 +1,11 @@
-use std::{collections::BTreeMap, fmt::Display, net::{IpAddr, Ipv4Addr}, sync::{Arc, Mutex, mpsc}, thread, time::SystemTime};
+use std::{collections::BTreeMap, fmt::Display, net::{IpAddr, Ipv4Addr}, num::ParseIntError, str::FromStr, sync::{Arc, Mutex, mpsc}, thread, time::{Duration, SystemTime}};
+
+use nom::{IResult, Parser, bytes::{complete::{tag, take_while}, take, take_while1}, character::complete::char, error::{ErrorKind, ParseError}, sequence::{delimited, preceded}};
 
 pub const VERSION: &str = "v0.1";
 pub const PROG: &str = "speakrs";
+
+pub const PROTOCOL_KEYWORD: &str = "SPEAKRS/0.1";
 
 
 // ======================================
@@ -322,7 +326,7 @@ impl Server {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-struct ChannelId {
+pub struct ChannelId {
     id: u8,
 }
 impl ChannelId {
@@ -332,7 +336,22 @@ impl ChannelId {
         }
     }
 }
-struct TextChannel {
+impl Display for ChannelId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
+impl FromStr for ChannelId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let id = s.parse::<u8>()?;
+        Ok(Self {
+            id
+        })
+    }
+}
+pub struct TextChannel {
     id: ChannelId,
     name: String,
     desc: String,
@@ -366,7 +385,7 @@ impl TextChannel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-struct UserId {
+pub struct UserId {
     id: u8,
 }
 impl UserId {
@@ -376,7 +395,22 @@ impl UserId {
         }
     }
 }
-struct User {
+impl Display for UserId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
+impl FromStr for UserId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let id = s.parse::<u8>()?;
+        Ok(Self {
+            id
+        })
+    }
+}
+pub struct User {
     id: UserId,
     name: String,
 }
@@ -387,7 +421,7 @@ impl User {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-struct MessageId {
+pub struct MessageId {
     id: u32,
 }
 impl MessageId {
@@ -397,7 +431,22 @@ impl MessageId {
         }
     }
 }
-struct Message {
+impl Display for MessageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
+impl FromStr for MessageId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let id = s.parse::<u32>()?;
+        Ok(Self {
+            id
+        })
+    }
+}
+pub struct Message {
     id: MessageId,
     timestamp: SystemTime,
     user: UserId,
@@ -412,4 +461,175 @@ impl Message {
             content
         }       
     }
+}
+
+// ==============================
+// => Network Codable
+// ==============================
+pub(crate) trait NetworkCodable {
+    fn matches(string: &[u8]) -> bool;
+    fn encode(self) -> String;
+    fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized;
+}
+#[derive(Debug, PartialEq)]
+pub(crate) enum DecodeError<I> {
+  DecodeError,
+  Nom(I, ErrorKind),
+}
+
+impl<I> ParseError<I> for DecodeError<I> {
+  fn from_error_kind(input: I, kind: ErrorKind) -> Self {
+    DecodeError::Nom(input, kind)
+  }
+
+  fn append(_: I, _: ErrorKind, other: Self) -> Self {
+    other
+  }
+}
+
+// ==============================
+// => Speakrs Commands // TODO: move into protocol.rs
+// ==============================
+pub(crate) enum Protocol {
+    CreateChannelRequest(CreateChannelCommand),
+    SendMessage(SendMessageCommand),
+    GetMessage(GetMessageCommand),
+    DeleteMessageRequest(DeleteMessageCommand)
+}
+impl Protocol {
+    pub(crate) fn create_channel(name: String, desc: String) -> Self {
+        Protocol::CreateChannelRequest(CreateChannelCommand { name, desc })
+    }
+    pub(crate) fn send_message(timestamp: SystemTime, user: UserId, content: String) -> Self {
+        Protocol::SendMessage(SendMessageCommand { timestamp, user, content } )
+    }
+}
+
+impl NetworkCodable for Protocol {
+    fn matches(string: &[u8]) -> bool {
+        CreateChannelCommand::matches(string) || SendMessageCommand::matches(string)
+    }
+
+    fn encode(self) -> String {
+        match self {
+            Protocol::CreateChannelRequest(create_channel_command) => create_channel_command.encode(),
+            Protocol::SendMessage(send_message_command) => send_message_command.encode(),
+            Protocol::GetMessage(_get_message_command) => todo!(),
+            Protocol::DeleteMessageRequest(_delete_message_command) => todo!(),
+        }
+    }
+
+    fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
+        if CreateChannelCommand::matches(string) {
+            let (input, command) = CreateChannelCommand::decode(string)?;
+            return Ok((input, Self::CreateChannelRequest(command)));
+        } 
+        //if SendMessageCommand::matches(string) {
+        let (input, command) = SendMessageCommand::decode(string)?;
+        Ok((input, Self::SendMessage(command)))
+        //}
+    }
+}
+
+
+pub(crate) struct CreateChannelCommand {
+    pub name: String,
+    pub desc: String,
+}
+impl NetworkCodable for CreateChannelCommand {
+    fn matches(string: &[u8]) -> bool {
+        string.starts_with(format!("{} {}", PROTOCOL_KEYWORD, "CreateChannelCommand").as_bytes())
+    }
+
+    fn encode(self) -> String {
+        format!("{} CreateChannelCommand name=[{}] desc=[{}]", PROTOCOL_KEYWORD, self.name, self.desc)
+    }
+
+    fn decode(string: &[u8]) -> IResult<&[u8], Self> {
+        let protocol = tag(PROTOCOL_KEYWORD);
+        let command = tag("CreateChannelCommand");
+        let name_field = preceded(
+            tag("name="),
+            delimited(char('['), take_while(|c| c != b']'), char(']'))
+        );
+        let desc_field = preceded(
+            tag("desc="),
+            delimited(char('['), take_while(|c| c != b']'), char(']'))
+        );
+
+        let (input, (_, _, _, _, name, _, desc)) =
+            (protocol, take_while1(|c| c == b' '), command, take_while1(|c| c == b' '), name_field, take_while1(|c| c == b' '), desc_field).parse(string)?;
+
+        let name = str::from_utf8(name).unwrap().to_string();
+        let desc = str::from_utf8(desc).unwrap().to_string();
+
+        Ok((input, Self { name, desc }))
+    }
+}
+
+pub(crate) struct SendMessageCommand {
+    pub timestamp: SystemTime,
+    pub user: UserId,
+    pub content: String,
+}
+impl NetworkCodable for SendMessageCommand {
+    fn matches(string: &[u8]) -> bool {
+        string.starts_with(format!("{} {}", PROTOCOL_KEYWORD, "SendMessageCommand").as_bytes())
+    }
+
+    fn encode(self) -> String {
+        format!("{} SendMessageCommand timestamp=[{}] user=[{}] content_length=[{}] content=[{}]", 
+            PROTOCOL_KEYWORD, 
+            self.timestamp.duration_since(SystemTime::UNIX_EPOCH).expect("Expected time after 1970.").as_millis() as u64,
+            self.user, self.content.len(), self.content)
+    }
+
+    fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
+        let protocol = tag(PROTOCOL_KEYWORD);
+        let command = tag("SendMessageCommand");
+        let timestamp_field = preceded(
+            tag("timestamp="),
+            delimited(char('['), take_while(|c| c != b']'), char(']'))
+        );
+        let user_field = preceded(
+            tag("user="),
+            delimited(char('['), take_while(|c| c != b']'), char(']'))
+        );
+        let content_length_field = preceded(
+            tag("content_length="),
+            delimited(char('['), take_while(|c| c != b']'), char(']'))
+        );
+
+        let (input, (_, _, _, _, timestamp, _, user, _, content_length, _)) =
+            (protocol, 
+             take_while1(|c| c == b' '), command,
+             take_while1(|c| c == b' '), timestamp_field,
+             take_while1(|c| c == b' '), user_field,
+             take_while1(|c| c == b' '), content_length_field,
+             take_while1(|c| c == b' ')).parse(string)?;
+
+        // we assume content is always valid utf8
+
+        let content_length = str::from_utf8(content_length).unwrap().parse::<usize>().expect("Expected valid usize content length.");
+
+        let mut content_field = preceded(
+            tag("content="),
+            delimited(char('['), take(content_length), char(']'))
+        );
+
+        let (input, content) = content_field.parse(input)?;
+
+        let timestamp = str::from_utf8(timestamp).unwrap().parse::<u64>().expect("Expected valid u64 timestamp.");
+        let timestamp = SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(timestamp)).expect("Expected valid timestamp.");
+        let user = str::from_utf8(user).unwrap().parse::<UserId>().expect("Expected valid UserId.");
+        let content = str::from_utf8(content).unwrap().to_string();
+
+        Ok((input, Self { timestamp, user, content }))
+    }
+}
+pub(crate) struct GetMessageCommand {
+
+}
+pub(crate) struct DeleteMessageCommand {
+
 }

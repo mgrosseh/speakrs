@@ -2,7 +2,7 @@ use std::{io::{Read, Write}, net::TcpStream};
 
 use bytes::{BufMut, Bytes, BytesMut};
 
-use crate::common::Arguments;
+use crate::common::{self, Arguments, CreateChannelCommand, NetworkCodable, Protocol};
 
 
 pub(crate) fn run(args: Arguments) {
@@ -10,15 +10,16 @@ pub(crate) fn run(args: Arguments) {
 }
 
 fn tui(args: Arguments) {
-    // check if local command wants to be send, send
-    // command. fetch commands with get if any
 
 
     let address = format!("{}:{}", args.server_ip, args.server_tcp_port);
     println!("Sending data to address: {}", address);
     let mut stream = TcpStream::connect(address).expect("Couldn't connect to the server...");
 
-    let buf = "GET / HTTP/1.1".as_bytes();
+    let command = Protocol::create_channel("Channel Name".to_string(), "A channel.".to_string());
+
+    let encoded = command.encode();
+    let buf = encoded.as_bytes();
     let write = stream.write_all(buf);
     if let Err(x) = write {
         println!("Error: {}", x);
@@ -27,27 +28,6 @@ fn tui(args: Arguments) {
     let read = stream.read(&mut out);
     match read {
         Err(x) => println!("Error: {}", x),
-        Ok(count) => println!("Read {} bytes: {}", count, String::from_utf8_lossy(&out)),
+        Ok(count) => println!("Read {} bytes: {}", count, str::from_utf8(&out).unwrap()),
     }
-
-
-}
-
-// commands
-// - ask create channel
-// - send message
-// - ask delete message
-// - fetch message in channel
-
-enum Command {
-    
-}
-
-struct CommandCodec {
-    encoder: fn(Command, &mut BytesMut),
-    decoder: fn(&Bytes),
-}
-
-struct Common {
-    //commands: 
 }

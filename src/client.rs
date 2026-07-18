@@ -1,8 +1,6 @@
-use std::{io::{Read, Write}, net::TcpStream};
+use std::{io::{Read, Write}, net::TcpStream, time::SystemTime};
 
-use bytes::{BufMut, Bytes, BytesMut};
-
-use crate::common::{self, Arguments, CreateChannelCommand, NetworkCodable, Protocol};
+use crate::common::{self, Arguments, ChannelId, NetworkCodable, Protocol, UserId};
 
 
 pub(crate) fn run(args: Arguments) {
@@ -17,17 +15,26 @@ fn tui(args: Arguments) {
     let mut stream = TcpStream::connect(address).expect("Couldn't connect to the server...");
 
     let command = Protocol::create_channel("Channel Name".to_string(), "A channel.".to_string());
-
-    let encoded = command.encode();
-    let buf = encoded.as_bytes();
-    let write = stream.write_all(buf);
-    if let Err(x) = write {
-        println!("Error: {}", x);
+    if let Err(x) = send_protocol(&stream, command) && args.verbose {
+        println!("Write Error: {}", x);
     }
+
+    let command = Protocol::send_message(ChannelId::default(), SystemTime::now(), UserId::default(), "A test message".to_string());
+    if let Err(x) = send_protocol(&stream, command) && args.verbose {
+        println!("Write Error: {}", x);
+    }
+
     let mut out: [u8; _] = [0; 128];
     let read = stream.read(&mut out);
     match read {
-        Err(x) => println!("Error: {}", x),
+        Err(x) => println!("Read Error: {}", x),
         Ok(count) => println!("Read {} bytes: {}", count, str::from_utf8(&out).unwrap()),
     }
+}
+
+fn send_protocol(mut stream: &TcpStream, protocol: Protocol) -> Result<(), std::io::Error> {
+    let mut encoded = protocol.encode();
+    encoded.push(common::PROTOCOL_END_CHAR);
+    let buf = encoded.as_bytes();
+    stream.write_all(buf)
 }

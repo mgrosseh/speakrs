@@ -1,4 +1,5 @@
-use std::{collections::BTreeMap, fmt::Display, net::{IpAddr, Ipv4Addr}, num::ParseIntError, str::FromStr, sync::{Arc, Mutex, mpsc}, thread, time::{Duration, SystemTime}};
+use core::fmt;
+use std::{collections::BTreeMap, error::Error, fmt::Display, net::{IpAddr, Ipv4Addr}, num::ParseIntError, str::FromStr, sync::{Arc, Mutex, mpsc}, thread, time::{Duration, SystemTime}};
 
 use nom::{IResult, Parser, bytes::{complete::{tag, take_while}, take, take_while1}, character::complete::char, error::{ErrorKind, ParseError}, sequence::{delimited, preceded}};
 
@@ -6,6 +7,7 @@ pub const VERSION: &str = "v0.1";
 pub const PROG: &str = "speakrs";
 
 pub const PROTOCOL_KEYWORD: &str = "SPEAKRS/0.1";
+pub const PROTOCOL_END_CHAR: char = '\x1C'; // File Separator character
 
 
 // ======================================
@@ -276,14 +278,34 @@ impl Drop for ThreadPool {
 // => server struct
 // ======================================
 
-struct Server {
+#[derive(Debug)]
+pub(crate) enum ServerError {
+    NoSuchMessage(MessageId),
+    NoSuchChannel(ChannelId),
+    NoSuchUser(UserId),
+}
+impl Error for ServerError {
+}
+impl fmt::Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSuchMessage(id) => write!(f, "Error: Message with requested id does not exist: `{}`", id),
+            Self::NoSuchChannel(id) => write!(f, "Error: Channel with requested id does not exist: `{}`", id),
+            Self::NoSuchUser(id) => write!(f, "Error: User with requested id does not exist: `{}`", id),
+        }
+    }
+}
+
+pub(crate) type ServerResult<T> = Result<T, ServerError>;
+
+pub(crate) struct Server {
     channels: BTreeMap<ChannelId, TextChannel>,
     users: BTreeMap<UserId, User>,
 }
 
 impl Server {
 
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let channels = BTreeMap::new();
         let users = BTreeMap::new();
         Self {
@@ -296,33 +318,77 @@ impl Server {
         todo!()
     }
 
-    fn test(&mut self) {
-        //self.channels.get_mut(&ChannelId::from(0));
+    // ==> Users
+    fn new_user_id(&self) -> UserId {
+        self.users.keys().max().map(|k| k.next()).unwrap_or_default()
     }
 
-    pub fn load_user(&mut self, id: UserId, name: String) -> UserId {
+    pub(crate) fn load_user(&mut self, id: UserId, name: String) -> ServerResult<UserId> {
         let user = User::new(id, name);
         self.users.insert(id, user);
-        id
+        Ok(id)
     }
 
-    pub fn add_user(&mut self, name: String) -> UserId {
-        let id = *self.users.keys().max().unwrap_or(&UserId::default());
+    pub(crate) fn add_user(&mut self, name: String) -> ServerResult<UserId> {
+        let id = self.new_user_id();
         self.load_user(id, name)
     }
 
-
-    pub fn load_channel(&mut self, id: ChannelId, name: String, desc: String) -> ChannelId {
-        let channel = TextChannel::new(id, name, desc);
-        self.channels.insert(id, channel);
-        id
+    pub(crate) fn get_user(&self, id: UserId) -> Option<&User> {
+        self.users.get(&id)
     }
 
-    pub fn add_channel(&mut self, name: String, desc: String) -> ChannelId {
-        let id = *self.channels.keys().max().unwrap_or(&ChannelId::default());
+    // ==> Channels
+    fn new_channel_id(&self) -> ChannelId {
+        self.channels.keys().max().map(|k| k.next()).unwrap_or_default()
+    }
+
+    pub(crate) fn load_channel(&mut self, id: ChannelId, name: String, desc: String) -> ServerResult<ChannelId> {
+        let channel = TextChannel::new(id, name, desc);
+        self.channels.insert(id, channel);
+        // TODO: check if exists
+        Ok(id)
+    }
+
+    pub(crate) fn add_channel(&mut self, name: String, desc: String) -> ServerResult<ChannelId> {
+        let id = self.new_channel_id();
         self.load_channel(id, name, desc)
     }
 
+    pub(crate) fn get_channel(&self, id: ChannelId) -> Option<&TextChannel> {
+        self.channels.get(&id)
+    }
+    // TODO: consider if needed
+    // pub(crate) fn get_channel_mut(&mut self, id: ChannelId) -> Option<&mut TextChannel> {
+    //     self.channels.get_mut(&id)
+    // }
+
+    // ==> Messages
+    pub(crate) fn load_message(&mut self, channel_id: ChannelId, message_id: MessageId, timestamp: SystemTime, user_id: UserId, content: String) -> ServerResult<MessageId> {
+        if self.get_user(user_id).is_none() {
+            return Err(ServerError::NoSuchUser(user_id));
+        }
+        let channel = self.channels.get_mut(&channel_id);
+        if channel.is_none() {
+            return Err(ServerError::NoSuchChannel(channel_id));
+        }
+        let channel = channel.unwrap();
+
+        channel.load_message(message_id, timestamp, user_id, content)
+    }
+
+    pub(crate) fn send_message(&mut self, channel_id: ChannelId, timestamp: SystemTime, user_id: UserId, content: String) -> ServerResult<MessageId> {
+        if self.get_user(user_id).is_none() {
+            return Err(ServerError::NoSuchUser(user_id));
+        }
+        let channel = self.channels.get_mut(&channel_id);
+        if channel.is_none() {
+            return Err(ServerError::NoSuchChannel(channel_id));
+        }
+        let channel = channel.unwrap();
+
+        channel.add_message(Some(timestamp), user_id, content)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -334,6 +400,9 @@ impl ChannelId {
         Self {
             id
         }
+    }
+    fn next(self) -> Self {
+        Self::from(self.id + 1)
     }
 }
 impl Display for ChannelId {
@@ -370,14 +439,18 @@ impl TextChannel {
         }
     }
 
-    pub fn load_message(&mut self, id: MessageId, timestamp: SystemTime, user: UserId, content: String) -> MessageId {
-        let message = Message::new(id, timestamp, user, content);
-        self.messages.insert(id, message);
-        id
+    fn new_message_id(&self) -> MessageId {
+        self.messages.keys().max().map(|k| k.next()).unwrap_or_default()
     }
 
-    pub fn add_message(&mut self, timestamp: Option<SystemTime>, user: UserId, content: String) -> MessageId {
-        let id = *self.messages.keys().max().unwrap_or(&MessageId::default());
+    fn load_message(&mut self, id: MessageId, timestamp: SystemTime, user: UserId, content: String) -> ServerResult<MessageId> {
+        let message = Message::new(id, timestamp, user, content);
+        self.messages.insert(id, message);
+        Ok(id)
+    }
+
+    fn add_message(&mut self, timestamp: Option<SystemTime>, user: UserId, content: String) -> ServerResult<MessageId> {
+        let id = self.new_message_id();
         let timestamp = timestamp.unwrap_or(SystemTime::now());
         self.load_message(id, timestamp, user, content)
     }
@@ -393,6 +466,9 @@ impl UserId {
         Self {
             id
         }
+    }
+    fn next(self) -> Self {
+        Self::from(self.id + 1)
     }
 }
 impl Display for UserId {
@@ -429,6 +505,9 @@ impl MessageId {
         Self {
             id
         }
+    }
+    fn next(self) -> Self {
+        Self::from(self.id + 1)
     }
 }
 impl Display for MessageId {
@@ -494,14 +573,15 @@ pub(crate) enum Protocol {
     CreateChannelRequest(CreateChannelCommand),
     SendMessage(SendMessageCommand),
     GetMessage(GetMessageCommand),
-    DeleteMessageRequest(DeleteMessageCommand)
+    DeleteMessageRequest(DeleteMessageCommand),
+    AddUser(AddUserCommand),
 }
 impl Protocol {
     pub(crate) fn create_channel(name: String, desc: String) -> Self {
         Protocol::CreateChannelRequest(CreateChannelCommand { name, desc })
     }
-    pub(crate) fn send_message(timestamp: SystemTime, user: UserId, content: String) -> Self {
-        Protocol::SendMessage(SendMessageCommand { timestamp, user, content } )
+    pub(crate) fn send_message(channel: ChannelId, timestamp: SystemTime, user: UserId, content: String) -> Self {
+        Protocol::SendMessage(SendMessageCommand { channel, timestamp, user, content } )
     }
 }
 
@@ -512,22 +592,22 @@ impl NetworkCodable for Protocol {
 
     fn encode(self) -> String {
         match self {
-            Protocol::CreateChannelRequest(create_channel_command) => create_channel_command.encode(),
-            Protocol::SendMessage(send_message_command) => send_message_command.encode(),
-            Protocol::GetMessage(_get_message_command) => todo!(),
-            Protocol::DeleteMessageRequest(_delete_message_command) => todo!(),
+            Self::CreateChannelRequest(cmd) => cmd.encode(),
+            Self::SendMessage(cmd) => cmd.encode(),
+            Self::GetMessage(_get_message_command) => todo!(),
+            Self::DeleteMessageRequest(_delete_message_command) => todo!(),
+            Self::AddUser(cmd) => cmd.encode(),
         }
     }
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
         if CreateChannelCommand::matches(string) {
-            let (input, command) = CreateChannelCommand::decode(string)?;
-            return Ok((input, Self::CreateChannelRequest(command)));
+            return CreateChannelCommand::decode(string).map(|(input, command)| (input, Self::CreateChannelRequest(command)));
         } 
-        //if SendMessageCommand::matches(string) {
-        let (input, command) = SendMessageCommand::decode(string)?;
-        Ok((input, Self::SendMessage(command)))
-        //}
+        if SendMessageCommand::matches(string) {
+            return SendMessageCommand::decode(string).map(|(input, command)| (input, Self::SendMessage(command)));
+        }
+        AddUserCommand::decode(string).map(|(input, command)| (input, Self::AddUser(command)))
     }
 }
 
@@ -568,6 +648,7 @@ impl NetworkCodable for CreateChannelCommand {
 }
 
 pub(crate) struct SendMessageCommand {
+    pub channel: ChannelId,
     pub timestamp: SystemTime,
     pub user: UserId,
     pub content: String,
@@ -578,8 +659,9 @@ impl NetworkCodable for SendMessageCommand {
     }
 
     fn encode(self) -> String {
-        format!("{} SendMessageCommand timestamp=[{}] user=[{}] content_length=[{}] content=[{}]", 
+        format!("{} SendMessageCommand channel=[{}] timestamp=[{}] user=[{}] content_length=[{}] content=[{}]", 
             PROTOCOL_KEYWORD, 
+            self.channel,
             self.timestamp.duration_since(SystemTime::UNIX_EPOCH).expect("Expected time after 1970.").as_millis() as u64,
             self.user, self.content.len(), self.content)
     }
@@ -587,6 +669,10 @@ impl NetworkCodable for SendMessageCommand {
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
         let protocol = tag(PROTOCOL_KEYWORD);
         let command = tag("SendMessageCommand");
+        let channel_field = preceded(
+            tag("channel="),
+            delimited(char('['), take_while(|c| c != b']'), char(']'))
+        );
         let timestamp_field = preceded(
             tag("timestamp="),
             delimited(char('['), take_while(|c| c != b']'), char(']'))
@@ -600,9 +686,10 @@ impl NetworkCodable for SendMessageCommand {
             delimited(char('['), take_while(|c| c != b']'), char(']'))
         );
 
-        let (input, (_, _, _, _, timestamp, _, user, _, content_length, _)) =
+        let (input, (_, _, _, _, channel, _, timestamp, _, user, _, content_length, _)) =
             (protocol, 
              take_while1(|c| c == b' '), command,
+             take_while1(|c| c == b' '), channel_field,
              take_while1(|c| c == b' '), timestamp_field,
              take_while1(|c| c == b' '), user_field,
              take_while1(|c| c == b' '), content_length_field,
@@ -619,12 +706,13 @@ impl NetworkCodable for SendMessageCommand {
 
         let (input, content) = content_field.parse(input)?;
 
+        let channel = str::from_utf8(channel).unwrap().parse::<ChannelId>().expect("Expected valid ChannelId.");
         let timestamp = str::from_utf8(timestamp).unwrap().parse::<u64>().expect("Expected valid u64 timestamp.");
         let timestamp = SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(timestamp)).expect("Expected valid timestamp.");
         let user = str::from_utf8(user).unwrap().parse::<UserId>().expect("Expected valid UserId.");
         let content = str::from_utf8(content).unwrap().to_string();
 
-        Ok((input, Self { timestamp, user, content }))
+        Ok((input, Self { channel, timestamp, user, content }))
     }
 }
 pub(crate) struct GetMessageCommand {
@@ -632,4 +720,33 @@ pub(crate) struct GetMessageCommand {
 }
 pub(crate) struct DeleteMessageCommand {
 
+}
+
+pub(crate) struct AddUserCommand {
+    pub(crate) username: String,
+}
+impl NetworkCodable for AddUserCommand {
+    fn matches(string: &[u8]) -> bool {
+        string.starts_with(format!("{} {}", PROTOCOL_KEYWORD, "SendMessageCommand").as_bytes())
+    }
+
+    fn encode(self) -> String {
+        format!("{} AddUser username=[{}]", PROTOCOL_KEYWORD, self.username)
+    }
+
+    fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
+        let protocol = tag(PROTOCOL_KEYWORD);
+        let command = tag("AddUser");
+        let name_field = preceded(
+            tag("username="),
+            delimited(char('['), take_while(|c| c != b']'), char(']'))
+        );
+
+        let (input, (_, _, _, _, username)) =
+            (protocol, take_while1(|c| c == b' '), command, take_while1(|c| c == b' '), name_field).parse(string)?;
+
+        let username = str::from_utf8(username).unwrap().to_string();
+
+        Ok((input, Self { username }))
+    }
 }

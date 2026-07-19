@@ -2,7 +2,7 @@ use std::{fs, io::{BufRead, BufReader, ErrorKind, Read, Write}, net::{TcpListene
 
 use nom::AsBytes;
 
-use crate::common::{self, Arguments, NetworkCodable, ThreadPool};
+use crate::common::{self, Arguments, NetworkCodable, Protocol, ThreadPool};
 
 
 pub(crate) fn run(args: Arguments) {
@@ -113,25 +113,14 @@ fn handle_speakrs_request(args: Arguments, mut server: ServerData, request_line:
         println!("Request (Speakrs): {request:#?}");
     }
 
-    let wrapped_command = common::Protocol::decode(request.as_bytes());
-    if let Err(x) = wrapped_command {
-        if args.verbose {
-            println!("Failed to parse command: `{}` || error: `{}`", request, x);
-        }
-        return;
+    let command = Protocol::parse_protocol_with_error_handling(request, args.verbose);
+    if command.is_none() {
+        return; // error reporting in function above
     }
-    let (rest, command) = wrapped_command.unwrap();
-    if args.verbose && !rest.eq(&[common::PROTOCOL_END_CHAR as u8; 1]) && !rest.is_empty() { // rest should always be empty but avoid crashes here just in case
-        print!("Warning: Request contains trailing data: chars: `{}`; ", str::from_utf8(&rest[1..]).unwrap());
-        print!(" u8:");
-        for c in &rest[1..] {
-            print!(" {}", c);
-        }
-        println!()
-    }
+    let command = command.unwrap();
 
     match command {
-        common::Protocol::CreateChannelRequest(cmd) => {
+        Protocol::AddChannel(cmd) => {
             let mut sd = server.lock_db().unwrap_or_else(|_| panic!("While handling CreateChannel Protocol: Could not acquire lock on server database."));
             match sd.add_channel(cmd.name.clone(), cmd.desc.clone()) {
                 Err(x) => {
@@ -142,7 +131,7 @@ fn handle_speakrs_request(args: Arguments, mut server: ServerData, request_line:
                 }
             }
         },
-        common::Protocol::SendMessage(cmd) => {
+        Protocol::AddMessage(cmd) => {
             let mut sd = server.lock_db().unwrap_or_else(|_| panic!("While handling SendMessage Protocol: Could not acquire lock on server database."));
             let time_in_secs = cmd.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
 
@@ -155,9 +144,7 @@ fn handle_speakrs_request(args: Arguments, mut server: ServerData, request_line:
                 }
             }
         },
-        common::Protocol::GetMessage(_cmd) => todo!(),
-        common::Protocol::DeleteMessageRequest(_cmd) => todo!(),
-        common::Protocol::AddUser(cmd) => {
+        Protocol::AddUser(cmd) => {
             let mut sd = server.lock_db().unwrap_or_else(|_| panic!("While handling Adduser Protocol: Could not acquire lock on server database."));
             match sd.add_user(cmd.username.clone()) {
                 Err(x) => {
@@ -169,6 +156,20 @@ fn handle_speakrs_request(args: Arguments, mut server: ServerData, request_line:
             }
 
         },
+        Protocol::RegisterData(cmd) => todo!(), // TODO: server does not accept incoming register commands -- send back error
+        Protocol::GetData(cmd) => match cmd {
+            common::GetDataProtocol::Message(channel_id, message_ids) => {
+                // TODO: locking server db could be a problem
+                let sd = server.lock_db().unwrap_or_else(|_| panic!("While handling GetData Channel Protocol: Could not acquire lock on server database."));
+                match sd.get_messages(channel_id, &message_ids[..]) {
+                    Err(server_error) => todo!(),
+                    Ok(messages) => todo!(),
+                }
+            },
+            common::GetDataProtocol::User(user_ids) => todo!(),
+            common::GetDataProtocol::Channel(channel_ids) => todo!(),
+        },
+        Protocol::DeleteData(cmd) => todo!(),
     }
 }
 

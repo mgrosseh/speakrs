@@ -1,6 +1,6 @@
 use std::{io::{BufRead, BufReader, Read, Write}, net::TcpStream, sync::{Arc, Mutex}, time::SystemTime};
 
-use crate::common::{self, Arguments, ChannelId, NetworkCodable, Protocol, UserId};
+use crate::{common::{self, Arguments, ChannelId, UserId}, protocol::Protocol};
 
 
 pub(crate) fn run(args: Arguments) {
@@ -125,5 +125,8 @@ fn handle_speakrs_request(args: Arguments, mut client: ClientData, stream: &TcpS
         Protocol::RegisterData(cmd) => todo!(),
         Protocol::GetData(cmd) => todo!(),
         Protocol::DeleteData(cmd) => todo!(),
+        Protocol::NewData(new_data_protocol) => todo!(),
+        Protocol::SendData(send_data_protocol) => todo!(),
+        Protocol::ServerError(server_error) => todo!(),
     }
 }

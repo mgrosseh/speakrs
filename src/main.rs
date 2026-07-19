@@ -1,6 +1,7 @@
 mod common;
 mod client;
 mod server;
+mod protocol;
 
 use std::env;
 

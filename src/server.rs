@@ -1,8 +1,8 @@
-use std::{fs, io::{BufRead, BufReader, ErrorKind, Read, Write}, net::{TcpListener, TcpStream, UdpSocket}, sync::{Arc, Mutex}, time::SystemTime};
+use std::{fs, io::{BufRead, BufReader, Read, Write}, net::{TcpListener, TcpStream, UdpSocket}, sync::{Arc, Mutex}, time::SystemTime};
 
 use nom::AsBytes;
 
-use crate::common::{self, Arguments, NetworkCodable, Protocol, ThreadPool};
+use crate::{common::{self, Arguments, ThreadPool}, protocol::{GetDataProtocol, Protocol}};
 
 
 pub(crate) fn run(args: Arguments) {
@@ -158,7 +158,7 @@ fn handle_speakrs_request(args: Arguments, mut server: ServerData, request_line:
         },
         Protocol::RegisterData(cmd) => todo!(), // TODO: server does not accept incoming register commands -- send back error
         Protocol::GetData(cmd) => match cmd {
-            common::GetDataProtocol::Message(channel_id, message_ids) => {
+            GetDataProtocol::Message(channel_id, message_ids) => {
                 // TODO: locking server db could be a problem
                 let sd = server.lock_db().unwrap_or_else(|_| panic!("While handling GetData Channel Protocol: Could not acquire lock on server database."));
                 match sd.get_messages(channel_id, &message_ids[..]) {
@@ -166,10 +166,13 @@ fn handle_speakrs_request(args: Arguments, mut server: ServerData, request_line:
                     Ok(messages) => todo!(),
                 }
             },
-            common::GetDataProtocol::User(user_ids) => todo!(),
-            common::GetDataProtocol::Channel(channel_ids) => todo!(),
+            GetDataProtocol::User(user_ids) => todo!(),
+            GetDataProtocol::Channel(channel_ids) => todo!(),
         },
         Protocol::DeleteData(cmd) => todo!(),
+        Protocol::NewData(new_data_protocol) => todo!(),
+        Protocol::SendData(send_data_protocol) => todo!(),
+        Protocol::ServerError(server_error) => todo!(),
     }
 }
 

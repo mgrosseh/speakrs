@@ -2,6 +2,7 @@ use std::{io::{BufRead, BufReader, Read}, net::TcpStream, sync::{Arc, Mutex}, ti
 
 use crate::{common::{self, Arguments, ChannelId, UserId}, protocol::{NewDataProtocol, Protocol}};
 
+use crate::gui;
 
 pub(crate) fn run(args: Arguments) {
     if args.gui {
@@ -16,7 +17,7 @@ pub(crate) fn run(args: Arguments) {
 // => Put GUI code here
 // ==============================
 fn gui(args: Arguments) {
-    todo!()
+    gui::run();
 }
 
 

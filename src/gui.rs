@@ -1,8 +1,9 @@
 
 use cxx_qt::casting::Upcast;
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QQmlEngine, QUrl};
+use core::pin::Pin;
 
-pub(crate) fn run(_args: Arguments){
+pub(crate) fn run(){
 // Create the application and engine
     let mut app = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();

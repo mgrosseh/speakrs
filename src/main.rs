@@ -2,6 +2,8 @@ mod common;
 mod client;
 mod server;
 mod protocol;
+mod gui;
+mod cxxqt_object;
 
 use std::env;
 

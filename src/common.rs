@@ -64,8 +64,8 @@ pub struct Arguments {
     pub server_udp_port: Port,
     pub verbose: bool,
     pub quiet: bool,
+    pub gui: bool,
 }
-
 
 impl Arguments {
     pub fn parse(args: &[String]) -> Option<Self> {
@@ -75,6 +75,7 @@ impl Arguments {
         let mut server_udp_port: Option<Port> = Option::None;
         let mut verbose: Option<bool> = Option::None;
         let mut quiet: Option<bool> = Option::None;
+        let mut gui: Option<bool> = Option::None;
         // TODO: use proper library for parsing cmdargs
         for arg in args {
             match arg.as_str() {
@@ -96,6 +97,7 @@ impl Arguments {
 
                 "client" => mode = Option::Some(Mode::Client),
                 "--quiet" | "-q" => quiet = Option::Some(true),
+                "--gui" => gui = Option::Some(true),
                 "--verbose" | "-v" => verbose = Option::Some(true),
                 x if x.starts_with("--udp=") => server_udp_port = Option::Some(Port::from_str(x.strip_prefix("--udp=").unwrap())),
                 x if x.starts_with("--tcp=") => server_tcp_port = Option::Some(Port::from_str(x.strip_prefix("--tcp=").unwrap())),
@@ -118,6 +120,7 @@ impl Arguments {
             server_udp_port: server_udp_port.unwrap_or(Port::new(7879)),
             verbose: verbose.unwrap_or(false),
             quiet: quiet.unwrap_or(false),
+            gui: gui.unwrap_or(false),
         })
     }
 

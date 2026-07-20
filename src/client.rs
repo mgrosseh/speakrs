@@ -1,11 +1,28 @@
-use std::{io::{BufRead, BufReader, Read, Write}, net::TcpStream, sync::{Arc, Mutex}, time::SystemTime};
+use std::{io::{BufRead, BufReader, Read}, net::TcpStream, sync::{Arc, Mutex}, time::SystemTime};
 
-use crate::{common::{self, Arguments, ChannelId, UserId}, protocol::{self, NewDataProtocol, Protocol}};
+use crate::{common::{self, Arguments, ChannelId, UserId}, protocol::{NewDataProtocol, Protocol}};
 
 
 pub(crate) fn run(args: Arguments) {
-    tui(args);
+    if args.gui {
+        gui(args);
+    }
+    else {
+        tui(args);
+    }
 }
+
+// ==============================
+// => Put GUI code here
+// ==============================
+fn gui(args: Arguments) {
+    todo!()
+}
+
+
+// ==============================
+// => Client Data
+// ==============================
 
 fn tui(args: Arguments) {
 

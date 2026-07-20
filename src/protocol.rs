@@ -217,7 +217,7 @@ impl NetworkCodable for NewChannelProtocol {
     fn decode(string: &[u8]) -> IResult<&[u8], Self> {
         let (input, (_, _, name, _, desc)) = (
             tag(Self::keyword()), 
-            tag(" "), protocol_field(b"name="), // TODO: name terminates on spaces
+            tag(" "), protocol_field(b"name="),
             tag(" "), protocol_field(b"desc=")).parse(string)?;
 
         let name = str::from_utf8(name).unwrap().to_string();

@@ -109,7 +109,7 @@ impl NetworkCodable for Protocol {
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
         let protocol = tag(PROTOCOL_KEYWORD);
-        let (string, _) =  (protocol, take_while1(|c| c == b' ')).parse(string)?;
+        let (string, _) =  (protocol, tag(" ")).parse(string)?;
 
         let result = RegisterDataProtocol::decode(string).map(|(input, command)| (input, Self::RegisterData(command)));
         if result.is_ok() {
@@ -123,6 +123,18 @@ impl NetworkCodable for Protocol {
         if result.is_ok() {
             return result;
         }
+        let result = NewDataProtocol::decode(string).map(|(input, command)| (input, Self::NewData(command)));
+        if result.is_ok() {
+            return result;
+        }
+        let result = SendDataProtocol::decode(string).map(|(input, command)| (input, Self::SendData(command)));
+        if result.is_ok() {
+            return result;
+        }
+        // let result = ServerError::decode(string).map(|(input, command)| (input, Self::ServerError(command)));
+        // if result.is_ok() {
+        //     return result;
+        // }
 
         Err(nom::Err::Failure(error::Error::new(string, ErrorKind::Fail)))
     }
@@ -173,8 +185,7 @@ impl NetworkCodable for NewDataProtocol {
     }
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
-        let keyword = tag(Self::keyword());
-        let (string, (_, _)) = (keyword, tag(" ")).parse(string)?;
+        let (string, (_, _)) = (tag(Self::keyword()), tag(" ")).parse(string)?;
 
         let result = NewChannelProtocol::decode(string).map(|(input, command)| (input, Self::Channel(command)));
         if result.is_ok() {
@@ -205,7 +216,7 @@ impl NetworkCodable for NewChannelProtocol {
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> {
         let (input, (_, _, name, _, desc)) = (
-            tag(NewChannelProtocol::keyword()), 
+            tag(Self::keyword()), 
             tag(" "), protocol_field(b"name="), // TODO: name terminates on spaces
             tag(" "), protocol_field(b"desc=")).parse(string)?;
 

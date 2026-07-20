@@ -1,9 +1,13 @@
-use std::{fmt::Display, sync::{Arc, Mutex, mpsc}, thread};
+use core::fmt;
+use std::{collections::BTreeMap, error::Error, fmt::Display, net::{IpAddr, Ipv4Addr}, num::ParseIntError, str::FromStr, sync::{Arc, Mutex, mpsc}, thread, time::SystemTime};
 
-use crate::common::IP::IPv4;
+use nom::{IResult, error::{ErrorKind, ParseError}};
 
 pub const VERSION: &str = "v0.1";
 pub const PROG: &str = "speakrs";
+
+pub const PROTOCOL_KEYWORD: &str = "SPEAKRS/0.1";
+pub const PROTOCOL_END_CHAR: char = '\x1C'; // File Separator character
 
 
 // ======================================
@@ -53,67 +57,25 @@ impl Display for Port {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum IP {
-    IPv4(u8, u8, u8, u8),
-    #[allow(unused)]
-    IPv6(u16, u16, u16, u16, u16, u16, u16, u16),
-}
-
-impl IP {
-    /// Create an IP from given string (using format n.n.n.n where each n is a u8)
-    ///
-    /// # Panics
-    /// 
-    /// The `from_str_v4` will panic if string is not a valid ip
-    pub(crate) fn from_str_v4(string: &str) -> Self {
-        let mut split = string.split('.');
-        let a = split
-            .next().expect("Expecting first part of ip.")
-            .parse::<u8>().expect("Expecting valid u8.");
-        let b = split
-            .next().expect("Expecting second part of ip.")
-            .parse::<u8>().expect("Expecting valid u8.");
-        let c = split
-            .next().expect("Expecting third part of ip.")
-            .parse::<u8>().expect("Expecting valid u8.");
-        let d = split
-            .next().expect("Expecting forth part of ip.")
-            .parse::<u8>().expect("Expecting valid u8.");
-        Self::IPv4(a, b, c, d)
-    }
-}
-impl Display for IP {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IPv4(a, b, c, d) => {
-                write!(f, "{a}.{b}.{c}.{d}")
-            }
-            _ => {
-                todo!("IPv6 not implemented yet.")
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct Arguments {
     pub mode: Mode,
-    pub server_ip: IP,
+    pub server_ip: IpAddr,
     pub server_tcp_port: Port,
     pub server_udp_port: Port,
     pub verbose: bool,
     pub quiet: bool,
+    pub gui: bool,
 }
-
 
 impl Arguments {
     pub fn parse(args: &[String]) -> Option<Self> {
         let mut mode: Option<Mode> = Option::None;
-        let mut server_ip: Option<IP> = Option::None;
+        let mut server_ip: Option<IpAddr> = Option::None;
         let mut server_tcp_port: Option<Port> = Option::None;
         let mut server_udp_port: Option<Port> = Option::None;
         let mut verbose: Option<bool> = Option::None;
         let mut quiet: Option<bool> = Option::None;
+        let mut gui: Option<bool> = Option::None;
         // TODO: use proper library for parsing cmdargs
         for arg in args {
             match arg.as_str() {
@@ -135,10 +97,11 @@ impl Arguments {
 
                 "client" => mode = Option::Some(Mode::Client),
                 "--quiet" | "-q" => quiet = Option::Some(true),
+                "--gui" => gui = Option::Some(true),
                 "--verbose" | "-v" => verbose = Option::Some(true),
                 x if x.starts_with("--udp=") => server_udp_port = Option::Some(Port::from_str(x.strip_prefix("--udp=").unwrap())),
                 x if x.starts_with("--tcp=") => server_tcp_port = Option::Some(Port::from_str(x.strip_prefix("--tcp=").unwrap())),
-                x if x.starts_with("--ip=") => server_ip = Option::Some(IP::from_str_v4(x.strip_prefix("--ip=").unwrap())),
+                x if x.starts_with("--ip=") => server_ip = Option::Some(x.strip_prefix("--ip=").unwrap().parse().expect("")),
                 x if x.starts_with("-") => {
                     err_unknown_arg(x);
                     return Option::None;
@@ -152,11 +115,12 @@ impl Arguments {
 
         Option::Some(Self {
             mode: mode.unwrap_or(Mode::Client),
-            server_ip: server_ip.unwrap_or(IP::from_str_v4("127.0.0.1")),
+            server_ip: server_ip.unwrap_or(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
             server_tcp_port: server_tcp_port.unwrap_or(Port::new(7878)),
             server_udp_port: server_udp_port.unwrap_or(Port::new(7879)),
             verbose: verbose.unwrap_or(false),
             quiet: quiet.unwrap_or(false),
+            gui: gui.unwrap_or(false),
         })
     }
 
@@ -311,4 +275,348 @@ impl Drop for ThreadPool {
             worker.thread.join().unwrap(); // NOTE: if unwrap panics, while drop is called in panic, all other cleanup is skipped (bad)
         }
     }
+}
+
+// ======================================
+// => server struct
+// ======================================
+
+#[derive(Debug)]
+pub(crate) enum ServerError {
+    NoSuchMessage(MessageId),
+    NoSuchChannel(ChannelId),
+    NoSuchUser(UserId),
+    MessageNotLoaded(MessageId),
+    ChannelNotLoaded(ChannelId),
+    UserNotLoaded(UserId),
+}
+impl Error for ServerError {
+}
+impl fmt::Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSuchMessage(id) => write!(f, "Error: Message with requested id does not exist: `{}`", id),
+            Self::NoSuchChannel(id) => write!(f, "Error: Channel with requested id does not exist: `{}`", id),
+            Self::NoSuchUser(id) => write!(f, "Error: User with requested id does not exist: `{}`", id),
+            Self::MessageNotLoaded(id) => write!(f, "Error: Message with requested id is not loaded: `{}`", id),
+            Self::ChannelNotLoaded(id) => write!(f, "Error: Channel with requested id is not loaded: `{}`", id),
+            Self::UserNotLoaded(id) => write!(f, "Error: User with requested id is not loaded: `{}`", id),
+        }
+    }
+}
+
+pub(crate) type ServerResult<T> = Result<T, ServerError>;
+
+pub(crate) struct Server {
+    channels: BTreeMap<ChannelId, Option<TextChannel>>,
+    users: BTreeMap<UserId, Option<User>>,
+}
+
+impl Server {
+
+    pub(crate) fn new() -> Self {
+        let channels = BTreeMap::new();
+        let users = BTreeMap::new();
+        Self {
+            channels,
+            users,
+        }
+    }
+
+    // ==> Users
+    fn new_user_id(&self) -> UserId {
+        self.users.keys().max().map(|k| k.next()).unwrap_or_default()
+    }
+
+    pub(crate) fn register_user(&mut self, id: UserId) -> ServerResult<UserId> {
+        self.users.insert(id, None); // TODO: handle if key exists
+        Ok(id)
+    }
+
+    pub(crate) fn load_user(&mut self, id: UserId, name: String) -> ServerResult<UserId> {
+        let user = User::new(id, name); // TODO: handle if key exists
+        self.users.insert(id, Some(user));
+        Ok(id)
+    }
+
+    pub(crate) fn add_user(&mut self, name: String) -> ServerResult<UserId> {
+        let id = self.new_user_id();
+        self.load_user(id, name)
+    }
+
+    pub(crate) fn get_user(&self, id: UserId) -> Option<&User> {
+        match self.users.get(&id) {
+            None => None,
+            Some(x) => x.as_ref()
+        }
+    }
+
+    // ==> Channels
+    fn new_channel_id(&self) -> ChannelId {
+        self.channels.keys().max().map(|k| k.next()).unwrap_or_default()
+    }
+
+    pub(crate) fn register_channel(&mut self, id: ChannelId) -> ServerResult<ChannelId> {
+        self.channels.insert(id, None); // TODO: handle if key exists
+        Ok(id)
+    }
+
+    pub(crate) fn load_channel(&mut self, id: ChannelId, name: String, desc: String) -> ServerResult<ChannelId> {
+        let channel = TextChannel::new(id, name, desc);
+        self.channels.insert(id, Some(channel)); // TODO: handle if exists
+        Ok(id)
+    }
+
+    pub(crate) fn add_channel(&mut self, name: String, desc: String) -> ServerResult<ChannelId> {
+        let id = self.new_channel_id();
+        self.load_channel(id, name, desc)
+    }
+
+    pub(crate) fn get_channel(&self, id: ChannelId) -> Option<&TextChannel> {
+        match self.channels.get(&id) {
+            None => None,
+            Some(x) => x.as_ref()
+        }
+    }
+
+    // ==> Messages
+    fn checked_get_channel(&mut self, id: ChannelId) -> ServerResult<&mut TextChannel> {
+        let channel = self.channels.get_mut(&id);
+        if channel.is_none() {
+            return Err(ServerError::NoSuchChannel(id));
+        }
+        let channel = channel.unwrap();
+        if channel.is_none() {
+            return Err(ServerError::ChannelNotLoaded(id));
+        }
+        Ok(channel.as_mut().unwrap())
+    }
+
+    pub(crate) fn register_message(&mut self, channel_id: ChannelId, message_id: MessageId) -> ServerResult<MessageId> {
+        let channel = self.checked_get_channel(channel_id)?;
+        channel.register_message(message_id)
+    }
+
+    pub(crate) fn load_message(&mut self, channel_id: ChannelId, message_id: MessageId, timestamp: SystemTime, user_id: UserId, content: String) -> ServerResult<MessageId> {
+        if self.get_user(user_id).is_none() {
+            return Err(ServerError::NoSuchUser(user_id));
+        }
+        let channel = self.checked_get_channel(channel_id)?;
+
+        channel.load_message(message_id, timestamp, user_id, content)
+    }
+
+    pub(crate) fn send_message(&mut self, channel_id: ChannelId, timestamp: SystemTime, user_id: UserId, content: String) -> ServerResult<MessageId> {
+        if self.get_user(user_id).is_none() {
+            return Err(ServerError::NoSuchUser(user_id));
+        }
+        let channel = self.checked_get_channel(channel_id)?;
+        channel.add_message(Some(timestamp), user_id, content)
+    }
+
+    pub(crate) fn get_messages(&self, channel_id: ChannelId, messages: &[MessageId]) -> ServerResult<Vec<&Message>> {
+        let channel = self.get_channel(channel_id);
+        if channel.is_none() {
+            return Err(ServerError::NoSuchChannel(channel_id));
+        }
+        let channel = channel.unwrap();
+        let mut vec = Vec::new();
+
+        for &id in messages {
+            let message = channel.get_message(id);
+            if message.is_none() {
+                return Err(ServerError::NoSuchMessage(id));
+            }
+            let message = message.unwrap();
+            vec.push(message);
+        }
+
+        Ok(vec)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct ChannelId {
+    id: u8,
+}
+impl ChannelId {
+    fn from(id: u8) -> Self {
+        Self {
+            id
+        }
+    }
+    fn next(self) -> Self {
+        Self::from(self.id + 1)
+    }
+}
+impl Display for ChannelId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
+impl FromStr for ChannelId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let id = s.parse::<u8>()?;
+        Ok(Self {
+            id
+        })
+    }
+}
+pub struct TextChannel {
+    id: ChannelId,
+    name: String,
+    desc: String,
+    messages: BTreeMap<MessageId, Option<Message>>,
+}
+
+impl TextChannel {
+    fn new(id: ChannelId, name: String, desc: String) -> Self {
+        let messages = BTreeMap::new();
+
+        Self {
+            id,
+            name,
+            desc,
+            messages
+        }
+    }
+
+    fn new_message_id(&self) -> MessageId {
+        self.messages.keys().max().map(|k| k.next()).unwrap_or_default()
+    }
+
+    fn load_message(&mut self, id: MessageId, timestamp: SystemTime, user: UserId, content: String) -> ServerResult<MessageId> {
+        let message = Message::new(id, timestamp, user, content);
+        self.messages.insert(id, Some(message)); // TODO: handle if key exists
+        Ok(id)
+    }
+
+    fn add_message(&mut self, timestamp: Option<SystemTime>, user: UserId, content: String) -> ServerResult<MessageId> {
+        let id = self.new_message_id();
+        let timestamp = timestamp.unwrap_or(SystemTime::now());
+        self.load_message(id, timestamp, user, content)
+    }
+
+    fn register_message(&mut self, id: MessageId) -> ServerResult<MessageId> {
+        self.messages.insert(id, None); // TODO: handle if key exists
+        Ok(id)
+    }
+
+    fn get_message(&self, id: MessageId) -> Option<&Message> {
+        match self.messages.get(&id) {
+            None => None,
+            Some(x) => x.as_ref()
+        }
+    }
+
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct UserId {
+    id: u8,
+}
+impl UserId {
+    fn from(id: u8) -> Self {
+        Self {
+            id
+        }
+    }
+    fn next(self) -> Self {
+        Self::from(self.id + 1)
+    }
+}
+impl Display for UserId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
+impl FromStr for UserId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let id = s.parse::<u8>()?;
+        Ok(Self {
+            id
+        })
+    }
+}
+pub struct User {
+    id: UserId,
+    name: String,
+}
+impl User {
+    fn new(id: UserId, name: String) -> Self {
+        Self { id, name }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct MessageId {
+    id: u32,
+}
+impl MessageId {
+    fn from(id: u32) -> Self {
+        Self {
+            id
+        }
+    }
+    fn next(self) -> Self {
+        Self::from(self.id + 1)
+    }
+}
+impl Display for MessageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
+impl FromStr for MessageId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let id = s.parse::<u32>()?;
+        Ok(Self {
+            id
+        })
+    }
+}
+pub struct Message {
+    id: MessageId,
+    timestamp: SystemTime,
+    user: UserId,
+    content: String,
+}
+impl Message {
+    fn new(id: MessageId, timestamp: SystemTime, user: UserId, content: String) -> Self {
+        Self {
+            id,
+            timestamp,
+            user,
+            content
+        }       
+    }
+}
+
+// ==============================
+// => Network Codable
+// ==============================
+pub(crate) trait NetworkCodable {
+    fn encode(&self) -> String;
+    fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized;
+}
+#[derive(Debug, PartialEq)]
+pub(crate) enum DecodeError<I> {
+  DecodeError,
+  Nom(I, ErrorKind),
+}
+
+impl<I> ParseError<I> for DecodeError<I> {
+  fn from_error_kind(input: I, kind: ErrorKind) -> Self {
+    DecodeError::Nom(input, kind)
+  }
+
+  fn append(_: I, _: ErrorKind, other: Self) -> Self {
+    other
+  }
 }

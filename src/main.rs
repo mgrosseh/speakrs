@@ -1,6 +1,7 @@
 mod common;
 mod client;
 mod server;
+mod protocol;
 
 use std::env;
 
@@ -14,7 +15,7 @@ fn main() {
     }
     let args: Arguments = args.unwrap();
     match args.mode {
-        common::Mode::CLIENT => client::run(args),
-        common::Mode::SERVER => server::run(args),
+        common::Mode::Client => client::run(args),
+        common::Mode::Server => server::run(args),
     }
 }

@@ -1,6 +1,6 @@
 use std::{io::Write, net::TcpStream, time::{Duration, SystemTime}};
 
-use nom::{IResult, Parser, bytes::{complete::{tag, take_till, take_while}, take, take_while1}, character::complete::char, error::{self, ErrorKind}, sequence::{delimited, preceded}};
+use nom::{IResult, Parser, bytes::{complete::{tag, take_till, take_while}, take, take_while1}, character::complete::char, error::{self, ErrorKind, ParseError}, sequence::{delimited, preceded}};
 
 use crate::common::{ChannelId, Message, MessageId, NetworkCodable, PROTOCOL_END_CHAR, PROTOCOL_KEYWORD, ServerError, TextChannel, User, UserId};
 
@@ -8,9 +8,6 @@ use crate::common::{ChannelId, Message, MessageId, NetworkCodable, PROTOCOL_END_
 // => Speakrs Protocol
 // ==============================
 pub(crate) enum Protocol {
-    AddChannel(AddChannelProtocol),
-    AddMessage(AddMessageProtocol),
-    AddUser(AddUserProtocol),
     NewData(NewDataProtocol),
     SendData(SendDataProtocol),
     RegisterData(RegisterDataProtocol),
@@ -20,13 +17,13 @@ pub(crate) enum Protocol {
 }
 impl Protocol {
     pub(crate) fn create_channel(name: String, desc: String) -> Self {
-        Protocol::AddChannel(AddChannelProtocol { name, desc })
+        Protocol::NewData(NewDataProtocol::Channel(NewChannelProtocol { name, desc }))
     }
     pub(crate) fn send_message(channel: ChannelId, timestamp: SystemTime, user: UserId, content: String) -> Self {
-        Protocol::AddMessage(AddMessageProtocol { channel, timestamp, user, content } )
+        Protocol::NewData(NewDataProtocol::Message(NewMessageProtocol { channel, timestamp, user, content } ))
     }
     pub(crate) fn add_user(username: String) -> Self {
-        Protocol::AddUser(AddUserProtocol { username })
+        Protocol::NewData(NewDataProtocol::User(NewUserProtocol { username }))
     }
     pub(crate) fn register_messages(channel: ChannelId, messages: Vec<MessageId>) -> Self {
         match RegisterDataProtocol::messages(channel, messages) {
@@ -95,104 +92,122 @@ impl Protocol {
 }
 
 impl NetworkCodable for Protocol {
-    fn matches(string: &[u8]) -> bool {
-        AddChannelProtocol::matches(string) || AddMessageProtocol::matches(string)
-    }
-
     fn encode(&self) -> String {
-        match self {
-            Self::AddChannel(cmd) => cmd.encode(),
-            Self::AddMessage(cmd) => cmd.encode(),
-            Self::AddUser(cmd) => cmd.encode(),
+        let mut encoded = String::from(PROTOCOL_KEYWORD);
+        encoded.push(' ');
+        encoded.push_str(match self {
             Self::NewData(cmd) => cmd.encode(),
             Self::SendData(cmd) => cmd.encode(),
             Self::RegisterData(cmd) => cmd.encode(),
             Self::GetData(cmd) => cmd.encode(),
             Self::DeleteData(cmd) => cmd.encode(),
             Self::ServerError(cmd) => todo!(),
-        }
+        }.as_str());
+
+        encoded
     }
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
-        if AddChannelProtocol::matches(string) {
-            return AddChannelProtocol::decode(string).map(|(input, command)| (input, Self::AddChannel(command)));
-        } 
-        if AddMessageProtocol::matches(string) {
-            return AddMessageProtocol::decode(string).map(|(input, command)| (input, Self::AddMessage(command)));
+        let protocol = tag(PROTOCOL_KEYWORD);
+        let (string, _) =  (protocol, take_while1(|c| c == b' ')).parse(string)?;
+
+        let result = RegisterDataProtocol::decode(string).map(|(input, command)| (input, Self::RegisterData(command)));
+        if result.is_ok() {
+            return result;
         }
-        if AddUserProtocol::matches(string) {
-            return AddUserProtocol::decode(string).map(|(input, command)| (input, Self::AddUser(command)));
+        let result = GetDataProtocol::decode(string).map(|(input, command)| (input, Self::GetData(command)));
+        if result.is_ok() {
+            return result;
         }
-        if RegisterDataProtocol::matches(string) {
-            return RegisterDataProtocol::decode(string).map(|(input, command)| (input, Self::RegisterData(command)));
-        }
-        if GetDataProtocol::matches(string) {
-            return GetDataProtocol::decode(string).map(|(input, command)| (input, Self::GetData(command)));
-        }
-        if DeleteDataProtocol::matches(string) {
-            return DeleteDataProtocol::decode(string).map(|(input, command)| (input, Self::DeleteData(command)));
+        let result = DeleteDataProtocol::decode(string).map(|(input, command)| (input, Self::DeleteData(command)));
+        if result.is_ok() {
+            return result;
         }
 
         Err(nom::Err::Failure(error::Error::new(string, ErrorKind::Fail)))
     }
 }
 
+
+
+
+// ==============================
+// => Helpers
+// ==============================
 trait HasProtocolKeyword {
     fn keyword() -> &'static str;
 }
 
+fn protocol_field_value<'a, E: ParseError<&'a [u8]>>() -> impl Parser<&'a [u8], Output = &'a [u8], Error = E> {
+    delimited(char('['), take_while(|c| c != b']'), char(']'))
+}
+fn protocol_space_ending_word<'a, E: ParseError<&'a [u8]>>() -> impl Parser<&'a [u8], Output = &'a [u8], Error = E> {
+    take_till(|c| c == b' ')
+}
+
+fn protocol_field<'a, E: ParseError<&'a [u8]>>(name_equals: &[u8]) -> impl Parser<&'a [u8], Output = &'a [u8], Error = E> {
+    preceded(tag(name_equals), protocol_field_value())
+}
 
 // ==============================
 // => New Data
 // ==============================
 pub(crate) enum NewDataProtocol {
-    Message(AddMessageProtocol),
-    User(AddUserProtocol),
-    Channel(AddChannelProtocol),
+    Message(NewMessageProtocol),
+    User(NewUserProtocol),
+    Channel(NewChannelProtocol),
 }
 impl HasProtocolKeyword for NewDataProtocol { fn keyword() -> &'static str { "NewData" } }
 impl NetworkCodable for NewDataProtocol {
-    fn matches(string: &[u8]) -> bool {
-        todo!()
-    }
-
     fn encode(&self) -> String {
-        todo!()
+        let mut encoded = String::from(Self::keyword());
+        encoded.push(' ');
+
+        encoded.push_str(match self {
+            NewDataProtocol::Message(protocol) => protocol.encode(),
+            NewDataProtocol::User(protocol) => protocol.encode(),
+            NewDataProtocol::Channel(protocol) => protocol.encode(),
+        }.as_str());
+
+        encoded
     }
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
-        todo!()
+        let keyword = tag(Self::keyword());
+        let (string, (_, _)) = (keyword, tag(" ")).parse(string)?;
+
+        let result = NewChannelProtocol::decode(string).map(|(input, command)| (input, Self::Channel(command)));
+        if result.is_ok() {
+            return result;
+        }
+        let result = NewMessageProtocol::decode(string).map(|(input, command)| (input, Self::Message(command)));
+        if result.is_ok() {
+            return result;
+        }
+        let result = NewUserProtocol::decode(string).map(|(input, command)| (input, Self::User(command)));
+        if result.is_ok() {
+            return result;
+        }
+
+        Err(nom::Err::Failure(error::Error::new(string, ErrorKind::Fail)))
     }
 }
 
-pub(crate) struct AddChannelProtocol {
+pub(crate) struct NewChannelProtocol {
     pub name: String,
     pub desc: String,
 }
-impl HasProtocolKeyword for AddChannelProtocol { fn keyword() -> &'static str { "AddChannel" } }
-impl NetworkCodable for AddChannelProtocol {
-    fn matches(string: &[u8]) -> bool {
-        string.starts_with(format!("{} {}", PROTOCOL_KEYWORD, AddChannelProtocol::keyword()).as_bytes())
-    }
-
+impl HasProtocolKeyword for NewChannelProtocol { fn keyword() -> &'static str { "NewChannel" } }
+impl NetworkCodable for NewChannelProtocol {
     fn encode(&self) -> String {
-        format!("{} {} name=[{}] desc=[{}]", PROTOCOL_KEYWORD, AddChannelProtocol::keyword(), self.name, self.desc)
+        format!("{} name=[{}] desc=[{}]", Self::keyword(), self.name, self.desc)
     }
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> {
-        let protocol = tag(PROTOCOL_KEYWORD);
-        let command = tag(AddChannelProtocol::keyword());
-        let name_field = preceded(
-            tag("name="),
-            delimited(char('['), take_while(|c| c != b']'), char(']'))
-        );
-        let desc_field = preceded(
-            tag("desc="),
-            delimited(char('['), take_while(|c| c != b']'), char(']'))
-        );
-
-        let (input, (_, _, _, _, name, _, desc)) =
-        (protocol, take_while1(|c| c == b' '), command, take_while1(|c| c == b' '), name_field, take_while1(|c| c == b' '), desc_field).parse(string)?;
+        let (input, (_, _, name, _, desc)) = (
+            tag(NewChannelProtocol::keyword()), 
+            tag(" "), protocol_field(b"name="), // TODO: name terminates on spaces
+            tag(" "), protocol_field(b"desc=")).parse(string)?;
 
         let name = str::from_utf8(name).unwrap().to_string();
         let desc = str::from_utf8(desc).unwrap().to_string();
@@ -201,57 +216,34 @@ impl NetworkCodable for AddChannelProtocol {
     }
 }
 
-pub(crate) struct AddMessageProtocol {
+pub(crate) struct NewMessageProtocol {
     pub channel: ChannelId,
     pub timestamp: SystemTime,
     pub user: UserId,
     pub content: String,
 }
-impl HasProtocolKeyword for AddMessageProtocol { fn keyword() -> &'static str { "AddMessage" } }
-impl NetworkCodable for AddMessageProtocol {
-    fn matches(string: &[u8]) -> bool {
-        string.starts_with(format!("{} {}", PROTOCOL_KEYWORD, AddMessageProtocol::keyword()).as_bytes())
-    }
-
+impl HasProtocolKeyword for NewMessageProtocol { fn keyword() -> &'static str { "NewMessage" } }
+impl NetworkCodable for NewMessageProtocol {
     fn encode(&self) -> String {
-        format!("{} {} channel=[{}] timestamp=[{}] user=[{}] content_length=[{}] content=[{}]", 
-            PROTOCOL_KEYWORD, 
-            AddMessageProtocol::keyword(),
+        format!("{} channel=[{}] timestamp=[{}] user=[{}] content_length=[{}] content=[{}]", 
+            Self::keyword(),
             self.channel,
             self.timestamp.duration_since(SystemTime::UNIX_EPOCH).expect("Expected time after 1970.").as_millis() as u64,
             self.user, self.content.len(), self.content)
     }
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
-        let protocol = tag(PROTOCOL_KEYWORD);
-        let command = tag(AddMessageProtocol::keyword());
-        let channel_field = preceded(
-            tag("channel="),
-            delimited(char('['), take_while(|c| c != b']'), char(']'))
-        );
-        let timestamp_field = preceded(
-            tag("timestamp="),
-            delimited(char('['), take_while(|c| c != b']'), char(']'))
-        );
-        let user_field = preceded(
-            tag("user="),
-            delimited(char('['), take_while(|c| c != b']'), char(']'))
-        );
-        let content_length_field = preceded(
-            tag("content_length="),
-            delimited(char('['), take_while(|c| c != b']'), char(']'))
-        );
+        let command = tag(NewMessageProtocol::keyword());
 
-        let (input, (_, _, _, _, channel, _, timestamp, _, user, _, content_length, _)) =
-        (protocol, 
-            take_while1(|c| c == b' '), command,
-            take_while1(|c| c == b' '), channel_field,
-            take_while1(|c| c == b' '), timestamp_field,
-            take_while1(|c| c == b' '), user_field,
-            take_while1(|c| c == b' '), content_length_field,
-            take_while1(|c| c == b' ')).parse(string)?;
+        let (input, (_, _, channel, _, timestamp, _, user, _, content_length, _)) =
+        (command,
+            tag(" "), protocol_field(b"channel="),
+            tag(" "), protocol_field(b"timestamp="),
+            tag(" "), protocol_field(b"user="),
+            tag(" "), protocol_field(b"content_length="),
+            tag(" ")).parse(string)?;
 
-        // we assume content is always valid utf8
+        // TODO: we assume content is always valid utf8
 
         let content_length = str::from_utf8(content_length).unwrap().parse::<usize>().expect("Expected valid usize content length.");
 
@@ -272,29 +264,20 @@ impl NetworkCodable for AddMessageProtocol {
     }
 }
 
-pub(crate) struct AddUserProtocol {
+pub(crate) struct NewUserProtocol {
     pub(crate) username: String,
 }
-impl HasProtocolKeyword for AddUserProtocol { fn keyword() -> &'static str { "AddUser" } }
-impl NetworkCodable for AddUserProtocol {
-    fn matches(string: &[u8]) -> bool {
-        string.starts_with(format!("{} {}", PROTOCOL_KEYWORD, AddUserProtocol::keyword()).as_bytes())
-    }
+impl HasProtocolKeyword for NewUserProtocol { fn keyword() -> &'static str { "NewUser" } }
+impl NetworkCodable for NewUserProtocol {
 
     fn encode(&self) -> String {
-        format!("{} {} username=[{}]", PROTOCOL_KEYWORD, AddUserProtocol::keyword(), self.username)
+        format!("{} username=[{}]", Self::keyword(), self.username)
     }
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
-        let protocol = tag(PROTOCOL_KEYWORD);
-        let command = tag(AddUserProtocol::keyword());
-        let name_field = preceded(
-            tag("username="),
-            delimited(char('['), take_while(|c| c != b']'), char(']'))
-        );
-
-        let (input, (_, _, _, _, username)) =
-        (protocol, take_while1(|c| c == b' '), command, take_while1(|c| c == b' '), name_field).parse(string)?;
+        let (input, (_, _, username)) = (
+            tag(Self::keyword()), 
+            tag(" "), protocol_field(b"username=")).parse(string)?;
 
         let username = str::from_utf8(username).unwrap().to_string();
 
@@ -312,9 +295,6 @@ pub(crate) enum SendDataProtocol {
 }
 impl HasProtocolKeyword for SendDataProtocol { fn keyword() -> &'static str { "SendData" } }
 impl NetworkCodable for SendDataProtocol {
-    fn matches(string: &[u8]) -> bool {
-        todo!()
-    }
 
     fn encode(&self) -> String {
         todo!()
@@ -325,15 +305,124 @@ impl NetworkCodable for SendDataProtocol {
     }
 }
 
+// ==============================
+// => IdsProtocol
+// ==============================
+pub(crate) struct ChannelIdsProtocol(pub Vec<ChannelId>);
+impl HasProtocolKeyword for ChannelIdsProtocol { fn keyword() -> &'static str { "Channel" }}
+impl NetworkCodable for ChannelIdsProtocol {
+    fn encode(&self) -> String {
+        let mut msg = format!("{} {} [{}", Self::keyword(), self.0.len(), self.0[0]);
+        for id in &self.0[1..] {
+            msg.push_str(format!(" {}", id).as_str())
+        }
+        msg.push(']');
+        msg
+    }
+
+    fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
+        let (mut input, (_, _, len, _)) = (
+            tag(Self::keyword()), tag(" "), 
+            protocol_space_ending_word(), tag(" ")
+        ).parse(string)?;
+        let len = str::from_utf8(len).unwrap().parse::<usize>().expect("Expected valid length value.");
+
+        let mut channels = Vec::new();
+
+        let (input1, first) = (take_till(|c| c == b' ' || c == b']')).parse(input)?;
+        let first = str::from_utf8(first).unwrap().parse::<ChannelId>().expect("Expected valid ChannelId.");
+        channels.push(first);
+        input = input1;
+
+        while channels.len() < len {
+            let (input1, (_, id)) = (tag(" "), take_till(|c| c == b' ' || c == b']')).parse(input)?;
+            input = input1;
+            let id = str::from_utf8(id).unwrap().parse::<ChannelId>().expect("Expected valid ChannelId.");
+            channels.push(id);
+        }
+        Ok((input, Self(channels)))
+    }
+}
+
+pub(crate) struct MessageIdsProtocol(pub ChannelId, pub Vec<MessageId>);
+impl HasProtocolKeyword for MessageIdsProtocol { fn keyword() -> &'static str { "Message" } }
+impl NetworkCodable for MessageIdsProtocol {
+    fn encode(&self) -> String {
+        let mut msg = format!("{} {} {} [{}", Self::keyword(), self.0, self.1.len(), self.1[0]);
+        for id in &self.1[1..] {
+            msg.push_str(format!(" {}", id).as_str())
+        }
+        msg.push(']');
+        msg
+    }
+
+    fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
+        let (mut input, (channel, _, len, _)) = (
+            protocol_space_ending_word(), tag(" "),
+            protocol_space_ending_word(), tag(" ")).parse(string)?;
+        let channel = str::from_utf8(channel).unwrap().parse::<ChannelId>().expect("Expected valid ChannelId");
+        let len = str::from_utf8(len).unwrap().parse::<usize>().expect("Expected valid length value.");
+
+        let mut messages = Vec::new();
+
+        let (input1, first) = (take_till(|c| c == b' ' || c == b']')).parse(input)?;
+        let first = str::from_utf8(first).unwrap().parse::<MessageId>().expect("Expected valid MessageId.");
+        messages.push(first);
+        input = input1;
+
+        while messages.len() < len {
+            let (input1, (_, id)) = (tag(" "), take_till(|c| c == b' ' || c == b']')).parse(input)?;
+            input = input1;
+            let id = str::from_utf8(id).unwrap().parse::<MessageId>().expect("Expected valid MessageId.");
+            messages.push(id);
+        }
+        Ok((input, Self(channel, messages)))
+    }
+
+}
+pub(crate) struct UserIdsProtocol(pub Vec<UserId>);
+impl HasProtocolKeyword for UserIdsProtocol { fn keyword() -> &'static str { "User" } }
+impl NetworkCodable for UserIdsProtocol {
+    fn encode(&self) -> String {
+        let mut msg = format!("{} {} [{}", Self::keyword(), self.0.len(), self.0[0]);
+        for id in &self.0[1..] {
+            msg.push_str(format!(" {}", id).as_str())
+        }
+        msg.push(']');
+        msg
+    }
+
+    fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
+        let (mut input, (_, _, len, _)) = (
+            tag(Self::keyword()), tag(" "),
+            protocol_space_ending_word(), tag(" ")).parse(string)?;
+        let len = str::from_utf8(len).unwrap().parse::<usize>().expect("Expected valid length value.");
+
+        let mut users = Vec::new();
+
+        let (input1, first) = (take_till(|c| c == b' ' || c == b']')).parse(input)?;
+        let first = str::from_utf8(first).unwrap().parse::<UserId>().expect("Expected valid UserId.");
+        users.push(first);
+        input = input1;
+
+        while users.len() < len {
+            let (input1, (_, id)) = (tag(" "), take_till(|c| c == b' ' || c == b']')).parse(input)?;
+            input = input1;
+            let id = str::from_utf8(id).unwrap().parse::<UserId>().expect("Expected valid UserId.");
+            users.push(id);
+        }
+        Ok((input, Self(users)))
+    }
+}
 
 
 // ==============================
 // => Register Data
 // ==============================
 pub(crate) enum RegisterDataProtocol {
-    Message(ChannelId, Vec<MessageId>),
-    User(Vec<UserId>),
-    Channel(Vec<ChannelId>),
+    Message(MessageIdsProtocol),
+    User(UserIdsProtocol),
+    Channel(ChannelIdsProtocol),
 }
 impl HasProtocolKeyword for RegisterDataProtocol { fn keyword() -> &'static str { "RegisterData" } }
 impl RegisterDataProtocol {
@@ -341,143 +430,62 @@ impl RegisterDataProtocol {
         if messages.is_empty() {
             return None;
         }
-        Some(RegisterDataProtocol::Message(channel_id, messages))
+        Some(Self::Message(MessageIdsProtocol(channel_id, messages)))
     }
     fn users(users: Vec<UserId>) -> Option<Self> {
         if users.is_empty() {
             return None;
         }
-        Some(RegisterDataProtocol::User(users))
+        Some(Self::User(UserIdsProtocol(users)))
     }
     fn channels(channels: Vec<ChannelId>) -> Option<Self> {
         if channels.is_empty() {
             return None;
         }
-        Some(RegisterDataProtocol::Channel(channels))
+        Some(Self::Channel(ChannelIdsProtocol(channels)))
     }
 }
 impl NetworkCodable for RegisterDataProtocol {
-    fn matches(string: &[u8]) -> bool {
-        string.starts_with(format!("{} {}", PROTOCOL_KEYWORD, RegisterDataProtocol::keyword()).as_bytes())
+    fn encode(&self) -> String {
+        let mut encoded = String::from(Self::keyword());
+        encoded.push(' ');
+        encoded.push_str(match self {
+            Self::Message(protocol) => protocol.encode(),
+            Self::User(protocol) => protocol.encode(),
+            Self::Channel(protocol) => protocol.encode(),
+        }.as_str());
+
+        encoded
     }
 
-    fn encode(&self) -> String {
-        match self {
-            RegisterDataProtocol::Message(channel_id, messages) => {
-                let mut msg = format!("{} {} Message {} {} [{}", PROTOCOL_KEYWORD, RegisterDataProtocol::keyword(), channel_id, messages.len(), messages[0]);
-                for id in &messages[1..] {
-                    msg.push_str(format!(" {}", id).as_str())
-                }
-                msg.push(']');
-                msg
-            },
-            RegisterDataProtocol::User(users) => {
-                let mut msg = format!("{} {} User {} [{}", PROTOCOL_KEYWORD, RegisterDataProtocol::keyword(), users.len(), users[0]);
-                for id in &users[1..] {
-                    msg.push_str(format!(" {}", id).as_str())
-                }
-                msg.push(']');
-                msg
-            },
-            RegisterDataProtocol::Channel(channels) => {
-                let mut msg = format!("{} {} Channel {} [{}", PROTOCOL_KEYWORD, RegisterDataProtocol::keyword(), channels.len(), channels[0]);
-                for id in &channels[1..] {
-                    msg.push_str(format!(" {}", id).as_str())
-                }
-                msg.push(']');
-                msg
-            },
-        }
-    }
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
-        let protocol = tag(PROTOCOL_KEYWORD);
-        let command = tag(RegisterDataProtocol::keyword());
-        let subtype = take_till(|c| c == b' ');
+        let (string, _) = (tag(Self::keyword()), tag(" ")).parse(string)?;
 
-        let (input, (_, _, _, _, subtype, _)) =
-        (protocol, 
-            tag(" "), command, 
-            tag(" "), subtype,
-            tag(" ")).parse(string)?;
-
-        match subtype {
-            b"User" => {
-                let (mut input, (len, _)) = (take_till(|c| c == b' '), tag(" ")).parse(input)?;
-                let len = str::from_utf8(len).unwrap().parse::<usize>().expect("Expected valid length value.");
-
-                let mut users = Vec::new();
-
-                let (input1, first) = (take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                let first = str::from_utf8(first).unwrap().parse::<UserId>().expect("Expected valid UserId.");
-                users.push(first);
-                input = input1;
-
-                while users.len() < len {
-                    let (input1, (_, id)) = (tag(" "), take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                    input = input1;
-                    let id = str::from_utf8(id).unwrap().parse::<UserId>().expect("Expected valid UserId.");
-                    users.push(id);
-                }
-                Ok((input, Self::User(users)))
-            },
-            b"Channel" => {
-                let (mut input, (len, _)) = (take_till(|c| c == b' '), tag(" ")).parse(input)?;
-                let len = str::from_utf8(len).unwrap().parse::<usize>().expect("Expected valid length value.");
-
-                let mut channels = Vec::new();
-
-                let (input1, first) = (take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                let first = str::from_utf8(first).unwrap().parse::<ChannelId>().expect("Expected valid ChannelId.");
-                channels.push(first);
-                input = input1;
-
-                while channels.len() < len {
-                    let (input1, (_, id)) = (tag(" "), take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                    input = input1;
-                    let id = str::from_utf8(id).unwrap().parse::<ChannelId>().expect("Expected valid ChannelId.");
-                    channels.push(id);
-                }
-                Ok((input, Self::Channel(channels)))
-            },
-            b"Message" => {
-                let (mut input, (channel, _, len, _)) = (
-                    take_till(|c| c == b' '), tag(" "),
-                    take_till(|c| c == b' '), tag(" ")).parse(input)?;
-                let channel = str::from_utf8(channel).unwrap().parse::<ChannelId>().expect("Expected valid ChannelId");
-                let len = str::from_utf8(len).unwrap().parse::<usize>().expect("Expected valid length value.");
-
-                let mut messages = Vec::new();
-
-                let (input1, first) = (take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                let first = str::from_utf8(first).unwrap().parse::<MessageId>().expect("Expected valid MessageId.");
-                messages.push(first);
-                input = input1;
-
-                while messages.len() < len {
-                    let (input1, (_, id)) = (tag(" "), take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                    input = input1;
-                    let id = str::from_utf8(id).unwrap().parse::<MessageId>().expect("Expected valid MessageId.");
-                    messages.push(id);
-                }
-                Ok((input, Self::Message(channel, messages)))
-            },
-            x => {
-                println!("WARNING: Encountered unexpected word during decode of RegisterDataProtocol. This could indicate problems. (`{}`)", str::from_utf8(x).unwrap_or("<utf8-error>"));
-                Err(nom::Err::Failure(error::Error::new(input, ErrorKind::Fail)))
-            },
+        let result = ChannelIdsProtocol::decode(string);
+        if result.is_ok() {
+            return  result.map(|(input, r)| (input, Self::Channel(r)));
         }
+        let result = UserIdsProtocol::decode(string);
+        if result.is_ok() {
+            return  result.map(|(input, r)| (input, Self::User(r)));
+        }
+        let result = MessageIdsProtocol::decode(string);
+        if result.is_ok() {
+                return  result.map(|(input, r)| (input, Self::Message(r)));
+        }
+
+        Err(nom::Err::Failure(error::Error::new(string, ErrorKind::Fail)))
     }
 }
-
 
 // ==============================
 // => Get Data
 // ==============================
 pub(crate) enum GetDataProtocol {
-    Message(ChannelId, Vec<MessageId>),
-    User(Vec<UserId>),
-    Channel(Vec<ChannelId>),
+    Message(MessageIdsProtocol),
+    User(UserIdsProtocol),
+    Channel(ChannelIdsProtocol),
 }
 impl HasProtocolKeyword for GetDataProtocol { fn keyword() -> &'static str { "GetData" } }
 impl GetDataProtocol {
@@ -485,132 +493,52 @@ impl GetDataProtocol {
         if messages.is_empty() {
             return None;
         }
-        Some(Self::Message(channel_id, messages))
+        Some(Self::Message(MessageIdsProtocol(channel_id, messages)))
     }
     fn users(users: Vec<UserId>) -> Option<Self> {
         if users.is_empty() {
             return None;
         }
-        Some(Self::User(users))
+        Some(Self::User(UserIdsProtocol(users)))
     }
     fn channels(channels: Vec<ChannelId>) -> Option<Self> {
         if channels.is_empty() {
             return None;
         }
-        Some(Self::Channel(channels))
+        Some(Self::Channel(ChannelIdsProtocol(channels)))
     }
 }
 impl NetworkCodable for GetDataProtocol {
-    fn matches(string: &[u8]) -> bool {
-        string.starts_with(format!("{} {}", PROTOCOL_KEYWORD, RegisterDataProtocol::keyword()).as_bytes())
+    fn encode(&self) -> String {
+        let mut encoded = String::from(Self::keyword());
+        encoded.push(' ');
+        encoded.push_str(match self {
+            Self::Message(protocol) => protocol.encode(),
+            Self::User(protocol) => protocol.encode(),
+            Self::Channel(protocol) => protocol.encode(),
+        }.as_str());
+
+        encoded
     }
 
-    fn encode(&self) -> String {
-        match self {
-            GetDataProtocol::Message(channel_id, messages) => {
-                let mut msg = format!("{} {} Message {} {} [{}", PROTOCOL_KEYWORD, GetDataProtocol::keyword(), channel_id, messages.len(), messages[0]);
-                for id in &messages[1..] {
-                    msg.push_str(format!(" {}", id).as_str())
-                }
-                msg.push(']');
-                msg
-            },
-            GetDataProtocol::User(users) => {
-                let mut msg = format!("{} {} User {} [{}", PROTOCOL_KEYWORD, GetDataProtocol::keyword(), users.len(), users[0]);
-                for id in &users[1..] {
-                    msg.push_str(format!(" {}", id).as_str())
-                }
-                msg.push(']');
-                msg
-            },
-            GetDataProtocol::Channel(channels) => {
-                let mut msg = format!("{} {} Channel {} [{}", PROTOCOL_KEYWORD, GetDataProtocol::keyword(), channels.len(), channels[0]);
-                for id in &channels[1..] {
-                    msg.push_str(format!(" {}", id).as_str())
-                }
-                msg.push(']');
-                msg
-            },
-        }
-    }
 
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
-        let protocol = tag(PROTOCOL_KEYWORD);
-        let command = tag(GetDataProtocol::keyword());
-        let subtype = take_till(|c| c == b' ');
+        let (string, _) = (tag(Self::keyword()), tag(" ")).parse(string)?;
 
-        let (input, (_, _, _, _, subtype, _)) =
-        (protocol, 
-            tag(" "), command, 
-            tag(" "), subtype,
-            tag(" ")).parse(string)?;
-
-        match subtype {
-            b"User" => {
-                let (mut input, (len, _)) = (take_till(|c| c == b' '), tag(" ")).parse(input)?;
-                let len = str::from_utf8(len).unwrap().parse::<usize>().expect("Expected valid length value.");
-
-                let mut users = Vec::new();
-
-                let (input1, first) = (take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                let first = str::from_utf8(first).unwrap().parse::<UserId>().expect("Expected valid UserId.");
-                users.push(first);
-                input = input1;
-
-                while users.len() < len {
-                    let (input1, (_, id)) = (tag(" "), take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                    input = input1;
-                    let id = str::from_utf8(id).unwrap().parse::<UserId>().expect("Expected valid UserId.");
-                    users.push(id);
-                }
-                Ok((input, Self::User(users)))
-            },
-            b"Channel" => {
-                let (mut input, (len, _)) = (take_till(|c| c == b' '), tag(" ")).parse(input)?;
-                let len = str::from_utf8(len).unwrap().parse::<usize>().expect("Expected valid length value.");
-
-                let mut channels = Vec::new();
-
-                let (input1, first) = (take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                let first = str::from_utf8(first).unwrap().parse::<ChannelId>().expect("Expected valid ChannelId.");
-                channels.push(first);
-                input = input1;
-
-                while channels.len() < len {
-                    let (input1, (_, id)) = (tag(" "), take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                    input = input1;
-                    let id = str::from_utf8(id).unwrap().parse::<ChannelId>().expect("Expected valid ChannelId.");
-                    channels.push(id);
-                }
-                Ok((input, Self::Channel(channels)))
-            },
-            b"Message" => {
-                let (mut input, (channel, _, len, _)) = (
-                    take_till(|c| c == b' '), tag(" "),
-                    take_till(|c| c == b' '), tag(" ")).parse(input)?;
-                let channel = str::from_utf8(channel).unwrap().parse::<ChannelId>().expect("Expected valid ChannelId");
-                let len = str::from_utf8(len).unwrap().parse::<usize>().expect("Expected valid length value.");
-
-                let mut messages = Vec::new();
-
-                let (input1, first) = (take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                let first = str::from_utf8(first).unwrap().parse::<MessageId>().expect("Expected valid MessageId.");
-                messages.push(first);
-                input = input1;
-
-                while messages.len() < len {
-                    let (input1, (_, id)) = (tag(" "), take_till(|c| c == b' ' || c == b']')).parse(input)?;
-                    input = input1;
-                    let id = str::from_utf8(id).unwrap().parse::<MessageId>().expect("Expected valid MessageId.");
-                    messages.push(id);
-                }
-                Ok((input, Self::Message(channel, messages)))
-            },
-            x => {
-                println!("WARNING: Encountered unexpected word during decode of GetDataProtocol. This could indicate problems. (`{}`)", str::from_utf8(x).unwrap_or("<utf8-error>"));
-                Err(nom::Err::Failure(error::Error::new(input, ErrorKind::Fail)))
-            },
+        let result = ChannelIdsProtocol::decode(string);
+        if result.is_ok() {
+            return  result.map(|(input, r)| (input, Self::Channel(r)));
         }
+        let result = UserIdsProtocol::decode(string);
+        if result.is_ok() {
+            return  result.map(|(input, r)| (input, Self::User(r)));
+        }
+        let result = MessageIdsProtocol::decode(string);
+        if result.is_ok() {
+                return  result.map(|(input, r)| (input, Self::Message(r)));
+        }
+
+        Err(nom::Err::Failure(error::Error::new(string, ErrorKind::Fail)))
     }
 }
 
@@ -619,21 +547,42 @@ impl NetworkCodable for GetDataProtocol {
 // => Delete Data
 // ==============================
 pub(crate) enum DeleteDataProtocol {
-    Message(ChannelId, MessageId),
-    User(UserId),
-    Channel(ChannelId),
+    Message(MessageIdsProtocol),
+    User(UserIdsProtocol),
+    Channel(ChannelIdsProtocol),
 }
 impl HasProtocolKeyword for DeleteDataProtocol { fn keyword() -> &'static str { "DeleteData" } }
 impl NetworkCodable for DeleteDataProtocol {
-    fn matches(string: &[u8]) -> bool {
-        todo!()
-    }
 
     fn encode(&self) -> String {
-        todo!()
+        let mut encoded = String::from(Self::keyword());
+        encoded.push(' ');
+        encoded.push_str(match self {
+            Self::Message(protocol) => protocol.encode(),
+            Self::User(protocol) => protocol.encode(),
+            Self::Channel(protocol) => protocol.encode(),
+        }.as_str());
+
+        encoded
     }
 
+
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized {
-        todo!()
+        let (string, _) = (tag(Self::keyword()), tag(" ")).parse(string)?;
+
+        let result = ChannelIdsProtocol::decode(string);
+        if result.is_ok() {
+            return  result.map(|(input, r)| (input, Self::Channel(r)));
+        }
+        let result = UserIdsProtocol::decode(string);
+        if result.is_ok() {
+            return  result.map(|(input, r)| (input, Self::User(r)));
+        }
+        let result = MessageIdsProtocol::decode(string);
+        if result.is_ok() {
+                return  result.map(|(input, r)| (input, Self::Message(r)));
+        }
+
+        Err(nom::Err::Failure(error::Error::new(string, ErrorKind::Fail)))
     }
 }

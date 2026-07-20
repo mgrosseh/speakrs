@@ -1,6 +1,6 @@
 use std::{io::{BufRead, BufReader, Read, Write}, net::TcpStream, sync::{Arc, Mutex}, time::SystemTime};
 
-use crate::{common::{self, Arguments, ChannelId, UserId}, protocol::Protocol};
+use crate::{common::{self, Arguments, ChannelId, UserId}, protocol::{self, NewDataProtocol, Protocol}};
 
 
 pub(crate) fn run(args: Arguments) {
@@ -15,7 +15,7 @@ fn tui(args: Arguments) {
     let mut stream = TcpStream::connect(address).expect("Couldn't connect to the server...");
 
 
-    let command = Protocol::create_channel("Channel Name".to_string(), "A channel.".to_string());
+    let command = Protocol::create_channel("ChannelName".to_string(), "AChannel.".to_string());
     if let Err(x) = command.send_protocol(&stream) && args.verbose {
         println!("Write Error: {}", x);
     }
@@ -86,46 +86,46 @@ fn handle_speakrs_request(args: Arguments, mut client: ClientData, stream: &TcpS
 
 
     match command {
-        Protocol::AddChannel(cmd) => {
-            let mut sd = client.lock_db().unwrap_or_else(|_| panic!("While handling CreateChannel Protocol: Could not acquire lock on server database."));
-            match sd.add_channel(cmd.name.clone(), cmd.desc.clone()) {
-                Err(x) => {
-                    println!("Encountered server error while trying to create channel \"{}\": {}", cmd.name, x);
-                },
-                Ok(id) => {
-                    println!("Created channel \"{}\" with id {} and description: |||{}|||", cmd.name, id, cmd.desc);
-                }
-            }
-        },
-        Protocol::AddMessage(cmd) => {
-            let mut sd = client.lock_db().unwrap_or_else(|_| panic!("While handling SendMessage Protocol: Could not acquire lock on server database."));
-            let time_in_secs = cmd.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
-
-            match sd.send_message(cmd.channel, cmd.timestamp, cmd.user, cmd.content.clone()) {
-                Err(x) => {
-                    println!("Encountered server error while trying to send message by user {} send at {} in channel {}: {}", cmd.user, time_in_secs, cmd.channel, x);
-                },
-                Ok(id) => {
-                    println!("Send message {} by user {} at {} in channel {}: {}", id, cmd.user, time_in_secs, cmd.channel, cmd.content);
-                }
-            }
-        },
-        Protocol::AddUser(cmd) => {
-            let mut sd = client.lock_db().unwrap_or_else(|_| panic!("While handling Adduser Protocol: Could not acquire lock on server database."));
-            match sd.add_user(cmd.username.clone()) {
-                Err(x) => {
-                    println!("Encountered server error while trying to create user \"{}\": {}", cmd.username, x);
-                },
-                Ok(id) => {
-                    println!("Created user \"{}\" with id {}.", cmd.username, id);
-                }
-            }
-
-        },
         Protocol::RegisterData(cmd) => todo!(),
         Protocol::GetData(cmd) => todo!(),
         Protocol::DeleteData(cmd) => todo!(),
-        Protocol::NewData(new_data_protocol) => todo!(),
+        Protocol::NewData(cmd) => match cmd {
+            NewDataProtocol::Message(cmd) => {
+                let mut sd = client.lock_db().unwrap_or_else(|_| panic!("While handling SendMessage Protocol: Could not acquire lock on server database."));
+                let time_in_secs = cmd.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+
+                match sd.send_message(cmd.channel, cmd.timestamp, cmd.user, cmd.content.clone()) {
+                    Err(x) => {
+                        println!("Encountered server error while trying to send message by user {} send at {} in channel {}: {}", cmd.user, time_in_secs, cmd.channel, x);
+                    },
+                    Ok(id) => {
+                        println!("Send message {} by user {} at {} in channel {}: {}", id, cmd.user, time_in_secs, cmd.channel, cmd.content);
+                    }
+                }
+            },
+            NewDataProtocol::User(cmd) => {
+                let mut sd = client.lock_db().unwrap_or_else(|_| panic!("While handling Adduser Protocol: Could not acquire lock on server database."));
+                match sd.add_user(cmd.username.clone()) {
+                    Err(x) => {
+                        println!("Encountered server error while trying to create user \"{}\": {}", cmd.username, x);
+                    },
+                    Ok(id) => {
+                        println!("Created user \"{}\" with id {}.", cmd.username, id);
+                    }
+                }
+            },
+            NewDataProtocol::Channel(cmd) => {
+                let mut sd = client.lock_db().unwrap_or_else(|_| panic!("While handling CreateChannel Protocol: Could not acquire lock on server database."));
+                match sd.add_channel(cmd.name.clone(), cmd.desc.clone()) {
+                    Err(x) => {
+                        println!("Encountered server error while trying to create channel \"{}\": {}", cmd.name, x);
+                    },
+                    Ok(id) => {
+                        println!("Created channel \"{}\" with id {} and description: |||{}|||", cmd.name, id, cmd.desc);
+                    }
+                }
+            },
+        },
         Protocol::SendData(send_data_protocol) => todo!(),
         Protocol::ServerError(server_error) => todo!(),
     }

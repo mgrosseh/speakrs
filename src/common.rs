@@ -599,7 +599,6 @@ impl Message {
 // => Network Codable
 // ==============================
 pub(crate) trait NetworkCodable {
-    fn matches(string: &[u8]) -> bool;
     fn encode(&self) -> String;
     fn decode(string: &[u8]) -> IResult<&[u8], Self> where Self: Sized;
 }

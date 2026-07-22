@@ -1,3 +1,20 @@
+/* TODO author, description
+ * Speakrs - A communication client / server program
+ * Copyright (C) 2026  Miranda Große-Heilmann
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
+ */
 use core::fmt;
 use std::{collections::BTreeMap, error::Error, fmt::Display, net::{IpAddr, Ipv4Addr}, num::ParseIntError, str::FromStr, sync::{Arc, Mutex, mpsc}, thread, time::SystemTime};
 
@@ -5,9 +22,13 @@ use nom::{IResult, error::{ErrorKind, ParseError}};
 
 pub const VERSION: &str = "v0.1";
 pub const PROG: &str = "speakrs";
+pub const PROG_YEAR: &str = "2026";
+pub const PROG_AUTHORS: &str = "Miranda Große-Heilmann, Julie, Viki";
 
 pub const PROTOCOL_KEYWORD: &str = "SPEAKRS/0.1";
 pub const PROTOCOL_END_CHAR: char = '\x1C'; // File Separator character
+
+const PROG_FULL_LICENSE_ARG: &str = "--full-license";
 
 
 // ======================================
@@ -94,7 +115,14 @@ impl Arguments {
                     }
                     mode = Option::Some(Mode::Server)
                 },
-
+                PROG_FULL_LICENSE_ARG => {
+                    full_license();
+                    return Option::None;
+                },
+                "--license" => {
+                    license();
+                    return Option::None;
+                },
                 "client" => mode = Option::Some(Mode::Client),
                 "--quiet" | "-q" => quiet = Option::Some(true),
                 "--gui" => gui = Option::Some(true),
@@ -124,6 +152,16 @@ impl Arguments {
         })
     }
 
+}
+
+fn license() {
+    println!("{PROG}  Copyright (C) {PROG_YEAR}  {PROG_AUTHORS}
+This program comes with ABSOLUTELY NO WARRANTY; for details use `{PROG_FULL_LICENSE_ARG}'.
+This is free software, and you are welcome to redistribute it
+under certain conditions; use `{PROG_FULL_LICENSE_ARG}' for details.")
+}
+fn full_license() {
+   todo!();
 }
 
 fn err_duplicate_mode(mode: &Mode, other: &Mode) {
@@ -278,8 +316,19 @@ impl Drop for ThreadPool {
 }
 
 // ======================================
+// => RPC
+// ======================================
+
+#[tarpc::service]
+pub trait World {
+    /// Returns a greeting for name.
+    async fn hello(name: String) -> String;
+}
+
+// ======================================
 // => server struct
 // ======================================
+
 
 #[derive(Debug)]
 pub(crate) enum ServerError {

@@ -319,11 +319,21 @@ impl Drop for ThreadPool {
 // => RPC
 // ======================================
 
+<<<<<<< HEAD
 // #[tarpc::service]
 // pub trait World {
 //     /// Returns a greeting for name.
 //     async fn hello(name: String) -> String;
 // }
+=======
+#[tarpc::service]
+pub trait World {
+    /// Returns a greeting for name.
+    async fn hello(name: String) -> String;
+    async fn pull_messages(channel_id: ChannelId, limit: usize) -> ServerResult<Vec<Message>>;
+    async fn send_message(channel_id: ChannelId, user_id: UserId, content: String) -> ServerResult<MessageId>;
+}
+>>>>>>> origin/main
 
 // ======================================
 // => server struct

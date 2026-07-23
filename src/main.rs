@@ -18,23 +18,19 @@
 mod common;
 mod client;
 mod server;
-mod protocol;
-mod gui;
-mod cxxqt_object;
 
-use std::env;
+use clap::Parser;
 
 use crate::common::Arguments;
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let args: Option<Arguments> = common::Arguments::parse(&args[1..]);
-    if args.is_none() {
-        return;
-    }
-    let args: Arguments = args.unwrap();
-    match args.mode {
-        common::Mode::Client => client::run(args),
-        common::Mode::Server => server::run(args),
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args =  Arguments::parse();
+
+    tracing_subscriber::fmt::init();
+
+    match args.command {
+        common::Commands::Client(args) => client::run(args).await,
+        common::Commands::Server(args) => server::run(args).await,
     }
 }

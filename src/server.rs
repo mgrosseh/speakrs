@@ -1,88 +1,86 @@
-use std::{fs, io::{BufRead, BufReader, Read, Write}, net::{TcpListener, TcpStream, UdpSocket}, sync::{Arc, Mutex}, time::SystemTime};
+use std::{net::{IpAddr, Ipv6Addr, SocketAddr}, sync::{Arc, Mutex}};
 
-use nom::AsBytes;
+use tarpc::{context::Context, server::{Channel, incoming::Incoming}, tokio_serde::formats::Json};
 
-use crate::{common::{self, Arguments, ThreadPool}, protocol::{GetDataProtocol, MessageIdsProtocol, NewDataProtocol, Protocol}};
+use crate::common::{self, ChannelId, Message, MessageId, ServerResult, UserId, World};
 
+use futures::{future, prelude::*};
 
-pub(crate) fn run(args: Arguments) {
-    web_server(args);
+#[derive(Debug, clap::Parser)]
+pub(crate) struct ServerArguments {
+    /// Port to serve tcp commands under
+    #[clap(short, long)]
+    port: u16,
 }
 
-fn web_server(args: Arguments) {
+pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
     let server = ServerData::new();
-    tcp_server(args, server.clone());
-    udp_server(args, server.clone()); // TODO: currently never called because of loop, use threads
+    command_server(args, server.clone()).await
 }
 
-fn udp_server(args: Arguments, server: ServerData) { // TODO:
-    let address = format!("{}:{}", args.server_ip, args.server_udp_port);
-    let socket = UdpSocket::bind(address).unwrap();
+// This is the type that implements the generated World trait. It is the business logic
+// and is used to start the server.
+#[derive(Clone)]
+struct HelloServer(SocketAddr, ServerData);
 
-    let mut buf = [0; 10];
-    let (amt, _src) = socket.recv_from(&mut buf).unwrap();
-
-    let buf = &mut buf[..amt];
-    print!("Received upd data: ");
-    for c in buf {
-        print!("{}", c);
-    }
-    println!();
-
-}
-
-fn tcp_server(args: Arguments, server: ServerData) {
-    let address = format!("{}:{}", args.server_ip, args.server_tcp_port);
-
-    let listener = TcpListener::bind(address).unwrap();
-    let pool = ThreadPool::with_name(4, "web_request_listener", args);
-
-    if !args.quiet {
-        let address = format!("{}:{}", args.server_ip, args.server_tcp_port);
-        println!("Serving on address: {address}.")
+impl common::World for HelloServer {
+    async fn hello(self, _: Context, name: String) -> String {
+        // let sleep_time =
+        //     Duration::from_millis(Uniform::new_inclusive(1, 10).unwrap().sample(&mut rand::rng()));
+        // tokio::time::sleep(sleep_time).await;
+        format!("Hello, {name}! You are connected from {}", self.0)
     }
 
-    for stream in listener.incoming() {
-        let stream = stream.unwrap();
-        let server = server.clone();
+    async fn pull_messages(self, context: Context, channel_id: ChannelId, limit: usize) -> ServerResult<Vec<Message>>  {
+        let data = self.1;
+        let x = data.db.lock().unwrap();
+        x.pull_messages(channel_id, limit)
+    }
 
-        pool.execute(move || {  
-            handle_connection(args, server, stream);
-        });
-
+    async fn send_message(self, context: Context, channel_id: ChannelId, user: UserId, content: String) -> ServerResult<MessageId>  {
+        let data = self.1;
+        let mut x = data.db.lock().unwrap();
+        x.send_message(channel_id, user, content)
     }
 
 }
 
-fn handle_connection(args: Arguments, server: ServerData, stream: TcpStream) {
-    let mut buf_reader = BufReader::new(&stream);
-
-    let mut lookahead = [0_u8; common::PROTOCOL_KEYWORD.len()];
-    let read = buf_reader.read(&mut lookahead).unwrap();
-    let lookahead = &lookahead[..read];
-    if common::PROTOCOL_KEYWORD.eq(str::from_utf8(lookahead).unwrap()) {
-        handle_speakrs_request(args, server, common::PROTOCOL_KEYWORD, &stream, buf_reader);
-        return;
-    }
-
-    let mut request_line: String = str::from_utf8(lookahead).unwrap().to_string();
-    buf_reader.read_line(&mut request_line).unwrap();
-    let request_line = request_line.trim(); // ensure trailing newline's (etc) is removed
-
-    if args.verbose {
-        println!("Request: {request_line:#?}");
-    }
-
-    if request_line.contains("HTTP/1.1") {
-        handle_http_request(request_line, &stream, buf_reader);
-    }
+async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
+    tokio::spawn(fut);
 }
+
+#[tracing::instrument]
+async fn command_server(args: ServerArguments, server: ServerData) -> anyhow::Result<()> {
+   let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port);
+   let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Json::default).await?;
+   tracing::info!("Listening on port {}", listener.local_addr().port());
+   listener.config_mut().max_frame_length(usize::MAX);
+   listener
+   // Ignore accept errors.
+       .filter_map(|r| future::ready(r.ok()))
+       .map(tarpc::server::BaseChannel::with_defaults)
+   // Limit channels to 1 per IP.
+       .max_channels_per_key(1, |t| t.transport().peer_addr().unwrap().ip())
+   // serve is generated by the service attribute. It takes as input any type implementing
+   // the generated World trait.
+       .map(|channel| {
+           let server = HelloServer(channel.transport().peer_addr().unwrap(), server.clone());
+           channel.execute(server.serve()).for_each(spawn)
+       })
+   // Max 10 channels.
+       .buffer_unordered(10)
+       .for_each(|_| async {})
+       .await;
+
+    Ok(())
+}
+
 
 // ==============================
 // => Server Data
 // ==============================
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ServerData {
     db: Arc<Mutex<common::Server>>,
 }
@@ -98,134 +96,4 @@ impl ServerData {
     fn lock_db(&mut self) -> Result<std::sync::MutexGuard<'_, common::Server>, std::sync::PoisonError<std::sync::MutexGuard<'_, common::Server>>> {
         self.db.lock()
     }
-}
-
-// ==============================
-// => SPEAKRS
-// ==============================
-
-fn handle_speakrs_request(args: Arguments, mut server: ServerData, request_line: &str, _stream: &TcpStream, mut buf_reader: BufReader<&TcpStream>) {
-    let mut rest = Vec::new();
-    buf_reader.read_until(common::PROTOCOL_END_CHAR as u8, &mut rest).unwrap();
-    let request = format!("{}{}", request_line, str::from_utf8(rest.as_bytes()).unwrap());
-
-    if args.verbose {
-        println!("Request (Speakrs): {request:#?}");
-    }
-
-    let command = Protocol::parse_protocol_with_error_handling(request, args.verbose);
-    if command.is_none() {
-        return; // error reporting in function above
-    }
-    let command = command.unwrap();
-
-    match command {
-        Protocol::NewData(protocol) => match protocol {
-            NewDataProtocol::Channel(cmd) => {
-                let mut sd = server.lock_db().unwrap_or_else(|_| panic!("While handling CreateChannel Protocol: Could not acquire lock on server database."));
-                match sd.add_channel(cmd.name.clone(), cmd.desc.clone()) {
-                    Err(x) => {
-                        println!("Encountered server error while trying to create channel \"{}\": {}", cmd.name, x);
-                    },
-                    Ok(id) => {
-                        println!("Created channel \"{}\" with id {} and description: |||{}|||", cmd.name, id, cmd.desc);
-                    }
-                }
-            },
-            NewDataProtocol::Message(cmd) => {
-                let mut sd = server.lock_db().unwrap_or_else(|_| panic!("While handling SendMessage Protocol: Could not acquire lock on server database."));
-                let time_in_secs = cmd.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
-
-                match sd.send_message(cmd.channel, cmd.timestamp, cmd.user, cmd.content.clone()) {
-                    Err(x) => {
-                        println!("Encountered server error while trying to send message by user {} send at {} in channel {}: {}", cmd.user, time_in_secs, cmd.channel, x);
-                    },
-                    Ok(id) => {
-                        println!("Send message {} by user {} at {} in channel {}: {}", id, cmd.user, time_in_secs, cmd.channel, cmd.content);
-                    }
-                }
-            },
-            NewDataProtocol::User(cmd) => {
-                let mut sd = server.lock_db().unwrap_or_else(|_| panic!("While handling Adduser Protocol: Could not acquire lock on server database."));
-                match sd.add_user(cmd.username.clone()) {
-                    Err(x) => {
-                        println!("Encountered server error while trying to create user \"{}\": {}", cmd.username, x);
-                    },
-                    Ok(id) => {
-                        println!("Created user \"{}\" with id {}.", cmd.username, id);
-                    }
-                }
-
-            },
-        }
-        Protocol::RegisterData(cmd) => todo!(), // TODO: server does not accept incoming register commands -- send back error
-        Protocol::GetData(cmd) => match cmd {
-            GetDataProtocol::Message(MessageIdsProtocol(channel_id, message_ids)) => {
-                // TODO: locking server db could be a problem
-                let sd = server.lock_db().unwrap_or_else(|_| panic!("While handling GetData Channel Protocol: Could not acquire lock on server database."));
-                match sd.get_messages(channel_id, &message_ids[..]) {
-                    Err(server_error) => todo!(),
-                    Ok(messages) => todo!(),
-                }
-            },
-            GetDataProtocol::User(user_ids) => todo!(),
-            GetDataProtocol::Channel(channel_ids) => todo!(),
-        },
-        Protocol::DeleteData(cmd) => todo!(),
-        Protocol::NewData(new_data_protocol) => todo!(),
-        Protocol::SendData(send_data_protocol) => todo!(),
-        Protocol::ServerError(server_error) => todo!(),
-    }
-}
-
-// ==============================
-// => HTTP
-// ==============================
-
-fn handle_http_request(request_line: &str, mut stream: &TcpStream, buf_reader: BufReader<&TcpStream>) {
-
-    // read stream fully
-    let _request: Vec<String> = buf_reader
-            .lines()
-            .map(|result| result.unwrap())
-            .take_while(|line| !line.is_empty())
-            .collect();
-
-    if request_line.starts_with("GET ") {
-        let mut split = request_line.split(' ');
-        let _ = split.next().unwrap(); // always GET
-        let http_address = split.next().unwrap();
-        let http_version = split.next().unwrap();
-
-
-        match (http_address, http_version) {
-            ("/",  "HTTP/1.1") => {
-                let response = response_serve_page("web/home.html");
-                stream.write_all(response.as_bytes()).unwrap();
-            }
-            (addr, "HTTP/1.1") if addr.starts_with("/text_channel/") => {
-                //let subaddress = addr.strip_prefix("/text_channel/"); // TODO:
-            }
-            _ => {
-                let response = response_serve_page_with_code("web/404.html", "404", "NOT FOUND");
-
-                stream.write_all(response.as_bytes()).unwrap();
-            }
-        }
-    }
-    else {
-        let response = response_serve_page_with_code("web/404.html", "404", "NOT FOUND");
-        stream.write_all(response.as_bytes()).unwrap();
-    }
-}
-
-fn response_serve_page(address: &str) -> String {
-    response_serve_page_with_code(address, "200", "OK")
-}
-fn response_serve_page_with_code(address: &str, code: &str, html_response: &str) -> String {
-    let status_line = "HTTP/1.1";
-    let contents = fs::read_to_string(address).unwrap();
-    let lenght = contents.len();
-
-    format!("{status_line} {code} {html_response}\r\nContent-Length: {lenght}\r\n\r\n{contents}")
 }

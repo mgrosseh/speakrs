@@ -15,26 +15,40 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
-use std::{io::{BufRead, BufReader, Read}, net::TcpStream, sync::{Arc, Mutex}, time::SystemTime};
+use std::{net::SocketAddr, sync::{Arc, Mutex}, time::SystemTime};
 
-use crate::{common::{self, Arguments, ChannelId, UserId}, protocol::{NewDataProtocol, Protocol}};
+use clap::{Parser};
 
-use crate::gui;
+use tarpc::tokio_serde::formats::Json;
+use tracing::{Instrument, info, info_span, warn};
 
-pub(crate) fn run(args: Arguments) {
+use crate::common::{self};
+
+#[derive(Debug, Parser)]
+pub(crate) struct ClientArguments {
+    /// The address to connect to (port should be same as server)
+    #[clap(long)]
+    server_addr: SocketAddr,
+    /// With GUI, if false, runs TUI
+    #[clap(long, default_value_t = false)]
+    gui: bool,
+}
+
+pub(crate) async fn run(args: ClientArguments) -> anyhow::Result<()> {
     if args.gui {
         gui(args);
+        return Ok(());
     }
     else {
-        tui(args);
+        tui(args).await
     }
 }
 
 // ==============================
 // => Put GUI code here
 // ==============================
-fn gui(args: Arguments) {
-    gui::run();
+fn gui(args: ClientArguments) {
+    speakrs_gui::run();
 }
 
 
@@ -42,36 +56,52 @@ fn gui(args: Arguments) {
 // => Client Data
 // ==============================
 
-fn tui(args: Arguments) {
+#[tracing::instrument]
+async fn tui(args: ClientArguments) -> anyhow::Result<()> {
+    info!("Sending data to address: {}", args.server_addr);
+    let mut transport = tarpc::serde_transport::tcp::connect(args.server_addr, Json::default);
+    transport.config_mut().max_frame_length(usize::MAX);
+
+    let client = common::WorldClient::new(tarpc::client::Config::default(), transport.await?).spawn();
+    let send_client = client.clone();
+
+    let result = async move {
+        send_client.send_message(tarpc::context::current(), 0, 0, "Test Message".to_string()).await
+    }
+    .instrument(info_span!("Sending Message"))
+    .await;
+
+    let message_id = result.unwrap().unwrap();
+    println!("Send id {}", message_id);
 
 
-    let address = format!("{}:{}", args.server_ip, args.server_tcp_port);
-    println!("Sending data to address: {}", address);
-    let mut stream = TcpStream::connect(address).expect("Couldn't connect to the server...");
+    let send_client = client.clone();
+    let result = async move {
+        send_client.pull_messages(tarpc::context::current(), 0, 10).await
+    }
+    .instrument(info_span!("Pulling Messages"))
+    .await;
 
+    let messages = result.unwrap().unwrap();
 
-    let command = Protocol::create_channel("ChannelName".to_string(), "AChannel.".to_string());
-    if let Err(x) = command.send_protocol(&stream) && args.verbose {
-        println!("Write Error: {}", x);
+    println!();
+    println!("Messages ({}):", messages.len());
+    for m in messages {
+        println!("<{}> Author{}: {}", m.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(), m.author, m.content);
     }
 
-    let command = Protocol::send_message(ChannelId::default(), SystemTime::now(), UserId::default(), "A test message".to_string());
-    if let Err(x) = command.send_protocol(&stream) && args.verbose {
-        println!("Write Error: {}", x);
-    }
+    // match hello {
+    //     Ok(_) => info!("{hello:?}"),
+    //     Err(e) => warn!("{:?}", anyhow::Error::from(e)),
+    // }
 
-    let mut out: [u8; _] = [0; 128];
-    let read = stream.read(&mut out);
-    match read {
-        Err(x) => println!("Read Error: {}", x),
-        Ok(count) => println!("Read {} bytes: {}", count, str::from_utf8(&out).unwrap()),
-    }
+    Ok(())
 }
 
 // ==============================
 // => Client Data
 // ==============================
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ClientData {
     db: Arc<Mutex<common::Server>>,
 }
@@ -86,82 +116,5 @@ impl ClientData {
 
     fn lock_db(&mut self) -> Result<std::sync::MutexGuard<'_, common::Server>, std::sync::PoisonError<std::sync::MutexGuard<'_, common::Server>>> {
         self.db.lock()
-    }
-}
-
-// ==============================
-// => Speakrs
-// ==============================
-fn handle_connection(args: Arguments, server: ClientData, stream: TcpStream) {
-    let mut buf_reader = BufReader::new(&stream);
-
-    let mut request = Vec::new();
-    buf_reader.read_until(common::PROTOCOL_END_CHAR as u8, &mut request).unwrap();
-    let request = String::from_utf8(request).unwrap();
-
-    if !request.starts_with(common::PROTOCOL_KEYWORD) {
-        if args.verbose {
-            println!("Unrecognized incoming request: `{}`", request);
-        }
-        return;
-    }
-    handle_speakrs_request(args, server, &stream, request);
-}
-
-fn handle_speakrs_request(args: Arguments, mut client: ClientData, stream: &TcpStream, request: String) {
-    if args.verbose {
-        println!("Request (Speakrs): {request:#?}");
-    }
-
-    let command = Protocol::parse_protocol_with_error_handling(request, args.verbose);
-    if command.is_none() {
-        return; // error reporting in function above
-    }
-    let command = command.unwrap();
-
-
-    match command {
-        Protocol::RegisterData(cmd) => todo!(),
-        Protocol::GetData(cmd) => todo!(),
-        Protocol::DeleteData(cmd) => todo!(),
-        Protocol::NewData(cmd) => match cmd {
-            NewDataProtocol::Message(cmd) => {
-                let mut sd = client.lock_db().unwrap_or_else(|_| panic!("While handling SendMessage Protocol: Could not acquire lock on server database."));
-                let time_in_secs = cmd.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
-
-                match sd.send_message(cmd.channel, cmd.timestamp, cmd.user, cmd.content.clone()) {
-                    Err(x) => {
-                        println!("Encountered server error while trying to send message by user {} send at {} in channel {}: {}", cmd.user, time_in_secs, cmd.channel, x);
-                    },
-                    Ok(id) => {
-                        println!("Send message {} by user {} at {} in channel {}: {}", id, cmd.user, time_in_secs, cmd.channel, cmd.content);
-                    }
-                }
-            },
-            NewDataProtocol::User(cmd) => {
-                let mut sd = client.lock_db().unwrap_or_else(|_| panic!("While handling Adduser Protocol: Could not acquire lock on server database."));
-                match sd.add_user(cmd.username.clone()) {
-                    Err(x) => {
-                        println!("Encountered server error while trying to create user \"{}\": {}", cmd.username, x);
-                    },
-                    Ok(id) => {
-                        println!("Created user \"{}\" with id {}.", cmd.username, id);
-                    }
-                }
-            },
-            NewDataProtocol::Channel(cmd) => {
-                let mut sd = client.lock_db().unwrap_or_else(|_| panic!("While handling CreateChannel Protocol: Could not acquire lock on server database."));
-                match sd.add_channel(cmd.name.clone(), cmd.desc.clone()) {
-                    Err(x) => {
-                        println!("Encountered server error while trying to create channel \"{}\": {}", cmd.name, x);
-                    },
-                    Ok(id) => {
-                        println!("Created channel \"{}\" with id {} and description: |||{}|||", cmd.name, id, cmd.desc);
-                    }
-                }
-            },
-        },
-        Protocol::SendData(send_data_protocol) => todo!(),
-        Protocol::ServerError(server_error) => todo!(),
     }
 }

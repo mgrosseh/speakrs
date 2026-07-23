@@ -4,15 +4,9 @@ use core::pin::Pin;
 
 mod cxxqt_object;
 
-<<<<<<< HEAD
-pub fn run(){
-// Create the application and engine
-    let mut app  = QGuiApplication::new();
-=======
 pub fn run() {
     // Create the application and engine
     let mut app = QGuiApplication::new();
->>>>>>> origin/main
     let mut engine = QQmlApplicationEngine::new();
 
     // Load the QML path into the engine

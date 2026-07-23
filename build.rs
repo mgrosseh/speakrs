@@ -2,7 +2,9 @@
 use cxx_qt_build::{CxxQtBuilder, QmlModule};
 fn main() {
     println!("cargo::rustc-env=QMAKE=/usr/bin/qmake6");
-    CxxQtBuilder::new_qml_module(QmlModule::new("com.kdab.cxx_qt.demo").qml_file("qml/main.qml"))
+    CxxQtBuilder::new_qml_module(QmlModule::new("com.kdab.cxx_qt.demo")
+                                 .qml_files(["qml/main/main.qml", "qml/components/ListTile.qml"])
+                                 )
         // Link Qt's Network library
         // - Qt Core is always linked
         // - Qt Gui is linked by enabling the qt_gui Cargo feature of cxx-qt-lib.

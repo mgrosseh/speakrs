@@ -1,6 +1,6 @@
 
 use cxx_qt::casting::Upcast;
-use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QQmlEngine, QUrl};
+use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QQmlEngine, QUrl, QString};
 use core::pin::Pin;
 
 pub(crate) fn run(){
@@ -10,7 +10,11 @@ pub(crate) fn run(){
 
     // Load the QML path into the engine
     if let Some(engine) = engine.as_mut() {
-        engine.load(&QUrl::from("qrc:/qt/qml/com/kdab/cxx_qt/demo/qml/main.qml"));
+        engine.load(&QUrl::from(r#"qrc:/qt/qml/com/kdab/cxx_qt/demo/qml/main/main.qml"#));
+    }
+
+    if let Some(engine) = engine.as_mut() {
+        engine.add_import_path(&QString::from("qrc:/qt/qml/com/kdab/cxx_qt/demo/qml/components"));
     }
 
     if let Some(engine) = engine.as_mut() {

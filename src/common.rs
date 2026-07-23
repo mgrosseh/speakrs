@@ -319,11 +319,11 @@ impl Drop for ThreadPool {
 // => RPC
 // ======================================
 
-#[tarpc::service]
-pub trait World {
-    /// Returns a greeting for name.
-    async fn hello(name: String) -> String;
-}
+// #[tarpc::service]
+// pub trait World {
+//     /// Returns a greeting for name.
+//     async fn hello(name: String) -> String;
+// }
 
 // ======================================
 // => server struct

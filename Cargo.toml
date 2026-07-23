@@ -4,12 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cxx = "1.0.197"
-cxx-qt = "0.9.1"
-cxx-qt-lib = { version="0.9.1", features = ["qt_full"] }
 bytes = "1.12.1"
+clap = { version = "4.6.4", features = ["derive"] }
 nom = "8.0.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures = "0.3"
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tarpc = { version = "0.37.0", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"]}
+anyhow = "1.0.104"
+speakrs-gui = { path = "crates/speakrs-gui" }
 
+[workspace]
+members = [".", "crates/speakrs-gui"]
 
-[build-dependencies]
-cxx-qt-build = { version = "0.9.1", features = [ "link_qt_object_files" ] }

@@ -3,9 +3,11 @@ use cxx_qt::casting::Upcast;
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QQmlEngine, QUrl, QString};
 use core::pin::Pin;
 
-pub(crate) fn run(){
+mod cxxqt_object;
+
+pub fn run(){
 // Create the application and engine
-    let mut app = QGuiApplication::new();
+    let mut app  = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();
 
     // Load the QML path into the engine

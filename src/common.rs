@@ -15,9 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
-use core::fmt;
-use std::{collections::BTreeMap, error::Error, time::SystemTime};
+use std::time::SystemTime;
 use clap::{Parser, Subcommand};
+use sled::IVec;
+use uuid::Uuid;
 
 use crate::server;
 use crate::client;
@@ -54,141 +55,184 @@ pub enum Commands {
 pub trait World {
     /// Returns a greeting for name.
     async fn hello(name: String) -> String;
-    async fn pull_messages(channel_id: ChannelId, limit: usize) -> ServerResult<Vec<Message>>;
-    async fn send_message(channel_id: ChannelId, user_id: UserId, content: String) -> ServerResult<MessageId>;
+    // async fn pull_messages(channel_id: ChannelKey, limit: usize) -> anyhow::Result<Vec<MessageData>>;
+    // async fn send_message(channel_id: ChannelKey, user_id: UserKey, content: String) -> anyhow::Result<MessageKey>;
 }
 
 // ======================================
 // => server struct
 // ======================================
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+pub struct DBKey(Uuid);
+impl AsRef<[u8]> for DBKey {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Into<IVec> for DBKey {
+    fn into(self) -> IVec {
+        self.as_ref().into()
+    }
+}
+impl DBKey {
+    fn new() -> Self {
+        Self(Uuid::now_v7())
+    }
+}
+pub type MessageKey = DBKey;
+pub type UserKey = DBKey;
+pub type ChannelKey = DBKey;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub enum ServerError {
-    NoSuchMessage(MessageId),
-    NoSuchChannel(ChannelId),
-    NoSuchUser(UserId),
-    MessageNotLoaded(MessageId),
-    ChannelNotLoaded(ChannelId),
-    UserNotLoaded(UserId),
-}
-impl Error for ServerError {
-}
-impl fmt::Display for ServerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoSuchMessage(id) => write!(f, "Error: Message with requested id does not exist: `{}`", id),
-            Self::NoSuchChannel(id) => write!(f, "Error: Channel with requested id does not exist: `{}`", id),
-            Self::NoSuchUser(id) => write!(f, "Error: User with requested id does not exist: `{}`", id),
-            Self::MessageNotLoaded(id) => write!(f, "Error: Message with requested id is not loaded: `{}`", id),
-            Self::ChannelNotLoaded(id) => write!(f, "Error: Channel with requested id is not loaded: `{}`", id),
-            Self::UserNotLoaded(id) => write!(f, "Error: User with requested id is not loaded: `{}`", id),
-        }
-    }
-}
-
-pub(crate) type ServerResult<T> = Result<T, ServerError>;
-
-pub type MessageId = u64;
-pub type UserId = u64;
-pub type ChannelId = u64;
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct Server {
-    channels: BTreeMap<ChannelId, Option<TextChannel>>,
-    users: BTreeMap<UserId, Option<User>>,
-}
-
-impl Server {
-
-    pub(crate) fn new() -> Self {
-        let channels = BTreeMap::new();
-        let users = BTreeMap::new();
-        Self {
-            channels,
-            users,
-        }
-    }
-
-    pub(crate) fn send_message(&mut self, channel: ChannelId, user: UserId, content: String) -> ServerResult<MessageId> {
-        if !self.channels.contains_key(&channel) {
-            self.channels.insert(channel, Some(TextChannel::new("AutoChannel".to_string(), "Auto Generated Channel".to_string())));
-        }
-        let channel = self.channels.get_mut(&channel).unwrap().as_mut().unwrap();
-        channel.add_message(Option::None, user, content)
-    }
-    pub(crate) fn pull_messages(&self, channel: ChannelId, limit: usize) -> ServerResult<Vec<Message>> {
-        let channel = self.channels.get(&channel).unwrap().as_ref().unwrap();
-        Ok(channel.messages.values().map(|x| x.clone().unwrap()).take(limit).collect())
-    }
-
+pub enum ChannelType {
+    TEXT,
+    VOICE,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct TextChannel {
-    name: String,
+pub struct ChannelData {
+    channel_type: ChannelType,
+    display_name: String,
     desc: String,
-    messages: BTreeMap<MessageId, Option<Message>>,
 }
 
-impl TextChannel {
-    fn new(name: String, desc: String) -> Self {
-        let messages = BTreeMap::new();
-
+impl ChannelData {
+    fn text(display_name: String, desc: String) -> Self {
         Self {
-            name,
+            channel_type: ChannelType::TEXT,
+            display_name,
             desc,
-            messages
         }
     }
-
-    fn new_message_id(&self) -> MessageId {
-        self.messages.keys().max().map(|k| k + 1).unwrap_or_default()
-    }
-
-    fn load_message(&mut self, id: MessageId, timestamp: SystemTime, user: UserId, content: String) -> ServerResult<MessageId> {
-        let message = Message::new(timestamp, user, content);
-        self.messages.insert(id, Some(message)); // TODO: handle if key exists
-        Ok(id)
-    }
-
-    fn add_message(&mut self, timestamp: Option<SystemTime>, user: UserId, content: String) -> ServerResult<MessageId> {
-        let id = self.new_message_id();
-        let timestamp = timestamp.unwrap_or(SystemTime::now());
-        self.load_message(id, timestamp, user, content)
-    }
-
-    fn get_message(&self, id: MessageId) -> Option<&Message> {
-        match self.messages.get(&id) {
-            None => None,
-            Some(x) => x.as_ref()
+    fn voice(display_name: String, desc: String) -> Self {
+        Self {
+            channel_type: ChannelType::VOICE,
+            display_name,
+            desc,
         }
     }
-
+}
+impl Into<IVec> for ChannelData {
+    fn into(self) -> IVec {
+        serde_json::to_string(&self).unwrap().as_str().into() // unless serializers of struct members fail, this will never fail
+    }
+}
+impl From<IVec> for ChannelData {
+    fn from(value: IVec) -> Self {
+        // WARNING: if data is corrupted somehow these unwraps might fail
+        // TODO: fix
+        let value_str = str::from_utf8(&value[..]).unwrap(); // serde_json promises to always output valid utf8
+        serde_json::from_str(value_str).unwrap() // on correct write, this should always deserialize
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct User {
-    id: UserId,
+pub struct UserData {
+    // IDEA: join data, bio
     name: String,
 }
-impl User {
-    fn new(id: UserId, name: String) -> Self {
-        Self { id, name }
+impl UserData {
+    fn new(name: String) -> Self {
+        Self { name }
+    }
+}
+impl Into<IVec> for UserData {
+    fn into(self) -> IVec {
+        serde_json::to_string(&self).unwrap().as_str().into() // unless serializers of struct members fail, this will never fail
+    }
+}
+impl From<IVec> for UserData {
+    fn from(value: IVec) -> Self {
+        // WARNING: if data is corrupted somehow these unwraps might fail
+        // TODO: fix
+        let value_str = str::from_utf8(&value[..]).unwrap(); // serde_json promises to always output valid utf8
+        serde_json::from_str(value_str).unwrap() // on correct write, this should always deserialize
     }
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct Message {
+pub struct MessageData {
     pub timestamp: SystemTime,
-    pub author: UserId,
+    pub author: UserKey,
     pub content: String,
 }
-impl Message {
-    fn new(timestamp: SystemTime, author: UserId, content: String) -> Self {
+impl MessageData {
+    fn new(timestamp: SystemTime, author: UserKey, content: String) -> Self {
         Self {
             timestamp,
             author,
             content
         }       
     }
+}
+impl Into<IVec> for MessageData {
+    fn into(self) -> IVec {
+        serde_json::to_string(&self).unwrap().as_str().into() // unless serializers of struct members fail, this will never fail
+    }
+}
+impl From<IVec> for MessageData {
+    fn from(value: IVec) -> Self {
+        // WARNING: if data is corrupted somehow these unwraps might fail
+        // TODO: fix
+        let value_str = str::from_utf8(&value[..]).unwrap(); // serde_json promises to always output valid utf8
+        serde_json::from_str(value_str).unwrap() // on correct write, this should always deserialize
+    }
+}
+
+// ======================================
+// => database
+// ======================================
+
+enum ServerElements {
+    Users,
+    Channels,
+    Messages,
+    MessageChannelMap,
+}
+
+impl AsRef<[u8]> for ServerElements {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            ServerElements::Users => b"users",
+            ServerElements::Channels => b"channels",
+            ServerElements::Messages => b"messages",
+            ServerElements::MessageChannelMap => b"message_channel_map",
+        }
+    }
+}
+
+struct ServerDB {
+    db: sled::Db,
+}
+
+impl ServerDB {
+    fn new(database_location: &str) -> Self {
+        let db = sled::open(database_location).expect("open");
+        Self {
+            db
+        }
+    }
+
+    fn insert_message(&mut self, channel_key: ChannelKey, message_key: MessageKey, message: MessageData) -> anyhow::Result<Option<IVec>> {
+        let messages = self.db.open_tree(ServerElements::Messages)?;
+        let channel_map = self.db.open_tree(ServerElements::MessageChannelMap)?;
+        let old = messages.insert(message_key, message)?;
+        channel_map.insert(channel_key, message_key);
+
+        Ok(old)
+    }
+
+    fn add_message(&mut self, channel_key: ChannelKey, message: MessageData) -> anyhow::Result<()> {
+        self.insert_message(channel_key, MessageKey::new(), message).map(|_| ())
+    }
+
+    fn insert_channel(&mut self, channel_key: ChannelKey, channel: ChannelData) -> anyhow::Result<Option<IVec>> {
+        let channels = self.db.open_tree(ServerElements::Channels)?;
+        Ok(channels.insert(channel_key, channel)?)
+    }
+
+    fn insert_user(&mut self, username: UserKey, user: UserData) -> anyhow::Result<Option<IVec>> {
+        let users = self.db.open_tree(ServerElements::Users)?;
+        Ok(users.insert(username, user)?)
+    }
+
 }

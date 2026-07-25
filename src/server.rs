@@ -2,7 +2,7 @@ use std::{net::{IpAddr, Ipv6Addr, SocketAddr}, sync::{Arc, Mutex}};
 
 use tarpc::{context::Context, server::{Channel, incoming::Incoming}, tokio_serde::formats::Json};
 
-use crate::common::{self, ChannelId, Message, MessageId, ServerResult, UserId, World};
+use crate::common::{self, ChannelKey, MessageData, MessageKey, ServerResult, UserKey, World};
 
 use futures::{future, prelude::*};
 
@@ -31,13 +31,13 @@ impl common::World for HelloServer {
         format!("Hello, {name}! You are connected from {}", self.0)
     }
 
-    async fn pull_messages(self, context: Context, channel_id: ChannelId, limit: usize) -> ServerResult<Vec<Message>>  {
+    async fn pull_messages(self, context: Context, channel_id: ChannelKey, limit: usize) -> ServerResult<Vec<MessageData>>  {
         let data = self.1;
         let x = data.db.lock().unwrap();
         x.pull_messages(channel_id, limit)
     }
 
-    async fn send_message(self, context: Context, channel_id: ChannelId, user: UserId, content: String) -> ServerResult<MessageId>  {
+    async fn send_message(self, context: Context, channel_id: ChannelKey, user: UserKey, content: String) -> ServerResult<MessageKey>  {
         let data = self.1;
         let mut x = data.db.lock().unwrap();
         x.send_message(channel_id, user, content)

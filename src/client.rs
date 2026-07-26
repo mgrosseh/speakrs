@@ -65,30 +65,30 @@ async fn tui(args: ClientArguments) -> anyhow::Result<()> {
     let client = common::WorldClient::new(tarpc::client::Config::default(), transport.await?).spawn();
     let send_client = client.clone();
 
-    let result = async move {
-        send_client.send_message(tarpc::context::current(), 0, 0, "Test Message".to_string()).await
-    }
-    .instrument(info_span!("Sending Message"))
-    .await;
+    // let result = async move {
+    //     send_client.send_message(tarpc::context::current(), 0, 0, "Test Message".to_string()).await
+    // }
+    // .instrument(info_span!("Sending Message"))
+    // .await;
 
-    let message_id = result.unwrap().unwrap();
-    println!("Send id {}", message_id);
+    // let message_id = result.unwrap().unwrap();
+    // println!("Send id {}", message_id);
 
 
-    let send_client = client.clone();
-    let result = async move {
-        send_client.pull_messages(tarpc::context::current(), 0, 10).await
-    }
-    .instrument(info_span!("Pulling Messages"))
-    .await;
+    // let send_client = client.clone();
+    // let result = async move {
+    //     send_client.pull_messages(tarpc::context::current(), 0, 10).await
+    // }
+    // .instrument(info_span!("Pulling Messages"))
+    // .await;
 
-    let messages = result.unwrap().unwrap();
+    // let messages = result.unwrap().unwrap();
 
-    println!();
-    println!("Messages ({}):", messages.len());
-    for m in messages {
-        println!("<{}> Author{}: {}", m.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(), m.author, m.content);
-    }
+    // println!();
+    // println!("Messages ({}):", messages.len());
+    // for m in messages {
+    //     println!("<{}> Author{}: {}", m.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(), m.author, m.content);
+    // }
 
     // match hello {
     //     Ok(_) => info!("{hello:?}"),
@@ -96,25 +96,4 @@ async fn tui(args: ClientArguments) -> anyhow::Result<()> {
     // }
 
     Ok(())
-}
-
-// ==============================
-// => Client Data
-// ==============================
-#[derive(Clone, Debug)]
-struct ClientData {
-    db: Arc<Mutex<common::Server>>,
-}
-
-impl ClientData {
-    fn new() -> Self {
-        let db = Arc::new(Mutex::new(common::Server::new()));
-        Self {
-            db
-        }
-    }
-
-    fn lock_db(&mut self) -> Result<std::sync::MutexGuard<'_, common::Server>, std::sync::PoisonError<std::sync::MutexGuard<'_, common::Server>>> {
-        self.db.lock()
-    }
 }

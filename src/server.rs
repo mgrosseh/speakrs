@@ -2,7 +2,7 @@ use std::{net::{IpAddr, Ipv6Addr, SocketAddr}, sync::{Arc, Mutex}};
 
 use tarpc::{context::Context, server::{Channel, incoming::Incoming}, tokio_serde::formats::Json};
 
-use crate::common::{self, ChannelKey, MessageData, MessageKey, ServerResult, UserKey, World};
+use crate::common::{self, ChannelKey, MessageData, MessageKey, ServerDB, UserKey, World};
 
 use futures::{future, prelude::*};
 
@@ -14,14 +14,14 @@ pub(crate) struct ServerArguments {
 }
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
-    let server = ServerData::new();
-    command_server(args, server.clone()).await
+    let server = ServerDB::new("test.db");
+    command_server(args, server).await
 }
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
 #[derive(Clone)]
-struct HelloServer(SocketAddr, ServerData);
+struct HelloServer(SocketAddr, ServerDB);
 
 impl common::World for HelloServer {
     async fn hello(self, _: Context, name: String) -> String {
@@ -31,17 +31,17 @@ impl common::World for HelloServer {
         format!("Hello, {name}! You are connected from {}", self.0)
     }
 
-    async fn pull_messages(self, context: Context, channel_id: ChannelKey, limit: usize) -> ServerResult<Vec<MessageData>>  {
-        let data = self.1;
-        let x = data.db.lock().unwrap();
-        x.pull_messages(channel_id, limit)
-    }
+    // async fn pull_messages(self, context: Context, channel_id: ChannelKey, limit: usize) -> ServerResult<Vec<MessageData>>  {
+    //     let data = self.1;
+    //     let x = data.db.lock().unwrap();
+    //     x.pull_messages(channel_id, limit)
+    // }
 
-    async fn send_message(self, context: Context, channel_id: ChannelKey, user: UserKey, content: String) -> ServerResult<MessageKey>  {
-        let data = self.1;
-        let mut x = data.db.lock().unwrap();
-        x.send_message(channel_id, user, content)
-    }
+    // async fn send_message(self, context: Context, channel_id: ChannelKey, user: UserKey, content: String) -> ServerResult<MessageKey>  {
+    //     let data = self.1;
+    //     let mut x = data.db.lock().unwrap();
+    //     x.send_message(channel_id, user, content)
+    // }
 
 }
 
@@ -50,7 +50,7 @@ async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
 }
 
 #[tracing::instrument]
-async fn command_server(args: ServerArguments, server: ServerData) -> anyhow::Result<()> {
+async fn command_server(args: ServerArguments, server: ServerDB) -> anyhow::Result<()> {
    let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port);
    let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Json::default).await?;
    tracing::info!("Listening on port {}", listener.local_addr().port());
@@ -73,27 +73,4 @@ async fn command_server(args: ServerArguments, server: ServerData) -> anyhow::Re
        .await;
 
     Ok(())
-}
-
-
-// ==============================
-// => Server Data
-// ==============================
-
-#[derive(Clone, Debug)]
-struct ServerData {
-    db: Arc<Mutex<common::Server>>,
-}
-
-impl ServerData {
-    fn new() -> Self {
-        let db = Arc::new(Mutex::new(common::Server::new()));
-        Self {
-            db
-        }
-    }
-
-    fn lock_db(&mut self) -> Result<std::sync::MutexGuard<'_, common::Server>, std::sync::PoisonError<std::sync::MutexGuard<'_, common::Server>>> {
-        self.db.lock()
-    }
 }

@@ -200,19 +200,20 @@ impl AsRef<[u8]> for ServerElements {
     }
 }
 
-struct ServerDB {
+#[derive(Debug, Clone)]
+pub struct ServerDB {
     db: sled::Db,
 }
 
 impl ServerDB {
-    fn new(database_location: &str) -> Self {
+    pub fn new(database_location: &str) -> Self {
         let db = sled::open(database_location).expect("open");
         Self {
             db
         }
     }
 
-    fn insert_message(&mut self, channel_key: ChannelKey, message_key: MessageKey, message: MessageData) -> anyhow::Result<Option<IVec>> {
+    pub fn insert_message(&self, channel_key: ChannelKey, message_key: MessageKey, message: MessageData) -> anyhow::Result<Option<IVec>> {
         let messages = self.db.open_tree(ServerElements::Messages)?;
         let channel_map = self.db.open_tree(ServerElements::MessageChannelMap)?;
         let old = messages.insert(message_key, message)?;
@@ -221,18 +222,17 @@ impl ServerDB {
         Ok(old)
     }
 
-    fn add_message(&mut self, channel_key: ChannelKey, message: MessageData) -> anyhow::Result<()> {
+    pub fn add_message(&self, channel_key: ChannelKey, message: MessageData) -> anyhow::Result<()> {
         self.insert_message(channel_key, MessageKey::new(), message).map(|_| ())
     }
 
-    fn insert_channel(&mut self, channel_key: ChannelKey, channel: ChannelData) -> anyhow::Result<Option<IVec>> {
+    pub fn insert_channel(&self, channel_key: ChannelKey, channel: ChannelData) -> anyhow::Result<Option<IVec>> {
         let channels = self.db.open_tree(ServerElements::Channels)?;
         Ok(channels.insert(channel_key, channel)?)
     }
 
-    fn insert_user(&mut self, username: UserKey, user: UserData) -> anyhow::Result<Option<IVec>> {
+    pub fn insert_user(&self, username: UserKey, user: UserData) -> anyhow::Result<Option<IVec>> {
         let users = self.db.open_tree(ServerElements::Users)?;
         Ok(users.insert(username, user)?)
     }
-
 }

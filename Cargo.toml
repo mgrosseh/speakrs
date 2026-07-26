@@ -16,7 +16,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"]}
 anyhow = "1.0.104"
 speakrs-gui = { path = "crates/speakrs-gui" }
 sled = "0.34.7"
-uuid = { version = "1.24.0", features = ["serde", "v4", "v7"] }
+uuid = { version = "1.24.0", features = ["serde", "v4", "v7", "bytemuck"] }
+bytemuck = { version = "1.25.2", features = ["derive"] }
+rkyv = "0.8.17"
 
 [workspace]
 members = [".", "crates/speakrs-gui"]

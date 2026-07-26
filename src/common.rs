@@ -16,8 +16,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
 use std::time::SystemTime;
+use bytemuck::NoUninit;
+use bytemuck::Pod;
+use bytemuck::Zeroable;
 use clap::{Parser, Subcommand};
+use rkyv::Archive;
 use sled::IVec;
+use sled::Tree;
 use uuid::Uuid;
 
 use crate::server;
@@ -62,16 +67,25 @@ pub trait World {
 // ======================================
 // => server struct
 // ======================================
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
-pub struct DBKey(Uuid);
-impl AsRef<[u8]> for DBKey {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct DBVal<T>(T) where T: rkyv::Archive;
+
+impl<T> Into<IVec> for DBVal<T> {
+    fn into(self) -> IVec {
+        let x = rkyv::to_bytes(&self).unwrap();
+        x.into()
     }
 }
-impl Into<IVec> for DBKey {
-    fn into(self) -> IVec {
-        self.as_ref().into()
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize, Zeroable, Pod)]
+pub struct DBKey(Uuid);
+
+impl AsRef<[u8]> for DBKey {
+    fn as_ref(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
     }
 }
 impl DBKey {
@@ -82,11 +96,12 @@ impl DBKey {
 pub type MessageKey = DBKey;
 pub type UserKey = DBKey;
 pub type ChannelKey = DBKey;
+pub type ChannelMessageKey = (ChannelKey, MessageKey);
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum ChannelType {
-    TEXT,
-    VOICE,
+    Text,
+    Voice,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -99,14 +114,14 @@ pub struct ChannelData {
 impl ChannelData {
     fn text(display_name: String, desc: String) -> Self {
         Self {
-            channel_type: ChannelType::TEXT,
+            channel_type: ChannelType::Text,
             display_name,
             desc,
         }
     }
     fn voice(display_name: String, desc: String) -> Self {
         Self {
-            channel_type: ChannelType::VOICE,
+            channel_type: ChannelType::Voice,
             display_name,
             desc,
         }
@@ -215,15 +230,18 @@ impl ServerDB {
 
     pub fn insert_message(&self, channel_key: ChannelKey, message_key: MessageKey, message: MessageData) -> anyhow::Result<Option<IVec>> {
         let messages = self.db.open_tree(ServerElements::Messages)?;
-        let channel_map = self.db.open_tree(ServerElements::MessageChannelMap)?;
         let old = messages.insert(message_key, message)?;
-        channel_map.insert(channel_key, message_key);
 
         Ok(old)
     }
 
     pub fn add_message(&self, channel_key: ChannelKey, message: MessageData) -> anyhow::Result<()> {
         self.insert_message(channel_key, MessageKey::new(), message).map(|_| ())
+    }
+
+    pub fn get_message(&self, channel_key: ChannelKey, message_key: MessageKey) -> anyhow::Result<Option<MessageData>> {
+        let messages = self.db.open_tree(ServerElements::Messages)?;
+        messages.get(message_key).map(|maybe| maybe.map(|value| ))
     }
 
     pub fn insert_channel(&self, channel_key: ChannelKey, channel: ChannelData) -> anyhow::Result<Option<IVec>> {

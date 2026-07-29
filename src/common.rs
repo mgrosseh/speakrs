@@ -19,8 +19,15 @@ use std::time::SystemTime;
 use bytemuck::NoUninit;
 use bytemuck::Pod;
 use bytemuck::Zeroable;
+use chrono::DateTime;
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use rkyv::Archive;
+use rkyv::Serialize;
+use rkyv::api::high::HighSerializer;
+use rkyv::rancor::Error;
+use rkyv::ser::allocator::ArenaHandle;
+use rkyv::util::AlignedVec;
 use sled::IVec;
 use sled::Tree;
 use uuid::Uuid;
@@ -70,17 +77,19 @@ pub trait World {
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Archive, rkyv::Serialize, rkyv::Deserialize)]
-pub struct DBVal<T>(T) where T: rkyv::Archive;
+pub struct DBVal<T>(T);
 
-impl<T> Into<IVec> for DBVal<T> {
+impl<T> Into<IVec> for DBVal<T> where T: rkyv::Archive + for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, Error>, > {
     fn into(self) -> IVec {
-        let x = rkyv::to_bytes(&self).unwrap();
-        x.into()
+        rkyv::to_bytes(&self)
+            .unwrap()
+            .as_slice()
+            .into()
     }
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize, Zeroable, Pod)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize, Zeroable, Pod, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct DBKey(Uuid);
 
 impl AsRef<[u8]> for DBKey {
@@ -164,14 +173,14 @@ impl From<IVec> for UserData {
         serde_json::from_str(value_str).unwrap() // on correct write, this should always deserialize
     }
 }
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct MessageData {
-    pub timestamp: SystemTime,
+    pub timestamp: DateTime<Utc>,
     pub author: UserKey,
     pub content: String,
 }
 impl MessageData {
-    fn new(timestamp: SystemTime, author: UserKey, content: String) -> Self {
+    fn new(timestamp: DateTime<Utc>, author: UserKey, content: String) -> Self {
         Self {
             timestamp,
             author,
@@ -230,7 +239,7 @@ impl ServerDB {
 
     pub fn insert_message(&self, channel_key: ChannelKey, message_key: MessageKey, message: MessageData) -> anyhow::Result<Option<IVec>> {
         let messages = self.db.open_tree(ServerElements::Messages)?;
-        let old = messages.insert(message_key, message)?;
+        let old = messages.insert(message_key, DBVal(message))?;
 
         Ok(old)
     }

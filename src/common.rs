@@ -23,11 +23,17 @@ use chrono::DateTime;
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use rkyv::Archive;
+use rkyv::CheckBytes;
 use rkyv::Serialize;
-use rkyv::api::high::HighSerializer;
-use rkyv::rancor::Error;
-use rkyv::ser::allocator::ArenaHandle;
+use rkyv::de::deserializers::SharedDeserializeMap;
+use rkyv::ser::serializers::AlignedSerializer;
+use rkyv::ser::serializers::AllocScratch;
+use rkyv::ser::serializers::CompositeSerializer;
+use rkyv::ser::serializers::FallbackScratch;
+use rkyv::ser::serializers::HeapScratch;
+use rkyv::ser::serializers::SharedSerializeMap;
 use rkyv::util::AlignedVec;
+use rkyv::validation::validators::DefaultValidator;
 use sled::IVec;
 use sled::Tree;
 use uuid::Uuid;
@@ -79,12 +85,19 @@ pub trait World {
 #[derive(Debug, Clone, Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct DBVal<T>(T);
 
-impl<T> Into<IVec> for DBVal<T> where T: rkyv::Archive + for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, Error>, > {
+// TODO: I assume N=32 here to make compiler happy, but it might not be the right constant. I made it match the rkyv-32 import, since rkyv itself said it uses 32-bit as default for maximum compat (which may be unrelated)
+impl<T> Into<IVec> for DBVal<T> where T: rkyv::Archive + rkyv::Serialize<CompositeSerializer<AlignedSerializer<AlignedVec>, FallbackScratch<HeapScratch<32>, AllocScratch>, SharedSerializeMap>> { // for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, Error>, >
     fn into(self) -> IVec {
         rkyv::to_bytes(&self)
             .unwrap()
             .as_slice()
             .into()
+    }
+}
+impl<T> From<IVec> for DBVal<T> where T: Archive, T::Archived: CheckBytes<DefaultValidator<'_>> + rkyv::Deserialize<T, SharedDeserializeMap> {
+    fn from(value: IVec) -> Self {
+        rkyv::from_bytes(&value[..])
+            .unwrap() // TODO: proper error handling
     }
 }
 
@@ -250,7 +263,8 @@ impl ServerDB {
 
     pub fn get_message(&self, channel_key: ChannelKey, message_key: MessageKey) -> anyhow::Result<Option<MessageData>> {
         let messages = self.db.open_tree(ServerElements::Messages)?;
-        messages.get(message_key).map(|maybe| maybe.map(|value| ))
+        //messages.get(message_key).map(|maybe| maybe.map(|value| ))
+        Ok(None)
     }
 
     pub fn insert_channel(&self, channel_key: ChannelKey, channel: ChannelData) -> anyhow::Result<Option<IVec>> {

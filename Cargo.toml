@@ -18,8 +18,8 @@ speakrs-gui = { path = "crates/speakrs-gui" }
 sled = "0.34.7"
 uuid = { version = "1.24.0", features = ["serde", "v4", "v7", "bytemuck"] }
 bytemuck = { version = "1.25.2", features = ["derive"] }
-rkyv = { version = "0.8.17", features = ["uuid-1"] }
-chrono = { version = "0.4.45", features = ["rkyv", "serde", "rkyv-validation"] }
+rkyv = { version = "0.7.43", features = ["uuid"] }
+chrono = { version = "0.4.45", features = ["rkyv-32", "serde", "rkyv-validation"] }
 
 [workspace]
 members = [".", "crates/speakrs-gui"]

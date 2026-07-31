@@ -25,11 +25,9 @@ pub(crate) struct ServerArguments {
 }
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
-    let server = ServerDB::magic_open_server("test.db".to_string())?;
-    test_insert_and_read(server.clone())?;
-    test_old_messages(server.clone())?;
+    let server = ServerDB::magic_open_server(args.name.to_string())?;
+    command_server(args, server).await?;
     Ok(())
-    //command_server(args, server).await
 }
 
 // ======================================

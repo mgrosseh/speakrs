@@ -1,9 +1,3 @@
-use std::marker::PhantomData;
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::OnceLock;
-use std::sync::RwLock;
-
 /* TODO author, description
  * Speakrs - A communication client / server program
  * Copyright (C) 2026  Miranda Große-Heilmann
@@ -31,6 +25,10 @@ use serde::Serialize;
 use sled::IVec;
 use sled::Tree;
 use uuid::Uuid;
+use std::marker::PhantomData;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use crate::client::ClientConfig;
 use crate::server;

@@ -24,6 +24,8 @@ use tracing::{Instrument, info, info_span, warn};
 
 use crate::common::{self};
 
+mod systemaudio;
+
 #[derive(Debug, Parser)]
 pub(crate) struct ClientArguments {
     /// The address to connect to (port should be same as server)

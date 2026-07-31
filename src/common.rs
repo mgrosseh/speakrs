@@ -1,3 +1,7 @@
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
 /* TODO author, description
  * Speakrs - A communication client / server program
  * Copyright (C) 2026  Miranda Große-Heilmann
@@ -20,11 +24,13 @@ use bytemuck::Zeroable;
 use chrono::DateTime;
 use chrono::Utc;
 use clap::{Parser, Subcommand};
+use config::Source;
 use serde::Deserialize;
 use serde::Serialize;
 use sled::IVec;
 use sled::Tree;
 use uuid::Uuid;
+use config::Config;
 
 use crate::server;
 use crate::client;
@@ -51,6 +57,98 @@ pub enum Commands {
     Server(server::ServerArguments),
     /// Run in client mode
     Client(client::ClientArguments),
+}
+
+// ======================================
+// => Common Config
+// ======================================
+// TODO: using watch.rs example as reference, implement hot-reloading
+// TODO: full docs
+// We assume valid utf-8 for paths and values
+const CLIENT_CONFIG_NAME: &str = "speakrs_client";
+const SERVER_CONFIG_NAME: &str = "speakrs_server";
+const CONFIG_ENV_VAR_PREFIX: &str = "SPEAKRS";
+const CONFIG_CLIENT_PREFIX: &str = "SPEAKRS_CLIENT";
+const CONFIG_SERVER_PREFIX: &str = "SPEAKRS_SERVER";
+const CONFIG_DIR_OVERRIDE_ENV: &str = "SPEAKRS_CONFIG_HOME";
+const CONFIG_DIR_NAME: &str = "speakrs";
+// TODO currently this is called multiple times and recalculates path everytime -- should cache!
+pub fn config_home() -> PathBuf {
+    let unpack_env = |candidate_path: Result<String, std::env::VarError>, value: &str| {
+        if candidate_path.is_err() {
+            match candidate_path.unwrap_err() {
+                std::env::VarError::NotPresent => {}, // let other cases set home
+                std::env::VarError::NotUnicode(_) => println!("{}: WARNING: {} is not valid unicode, using fallback", PROG, value), // TODO: proper logging
+            }
+            return None;
+        }
+        else {
+            return Some(PathBuf::from(candidate_path.unwrap()));
+        }
+    };
+    if cfg!(target_os = "linux") {
+        if let Some(v) = unpack_env(env::var(CONFIG_DIR_OVERRIDE_ENV), CONFIG_DIR_OVERRIDE_ENV) {
+            return v;
+        }
+        let xdg_config_home = unpack_env(env::var("XDG_CONFIG_HOME"), "XDG_CONFIG_HOME");
+        if let Some(mut v) = xdg_config_home {
+            v.push(CONFIG_DIR_NAME);
+            return v;
+        }
+        match unpack_env(env::var("HOME"), "HOME") {
+            Some(home) => {
+                let buf = PathBuf::from(home);
+                return buf;
+            },
+            None => panic!("HOME env var cannot be read, use {} env var or fix your environment.", CONFIG_DIR_OVERRIDE_ENV),
+        }
+    }
+    // see also target_family for more generic approach
+    // other values (of intrest): windows, macos, ios, android, freebsd, openbsd, netbsd
+    todo!("Other operating systems are not supported currently.")
+}
+// TODO: move into client / server when version is finalized
+/// Intended to be called by client.rs to create its config front-end, use their config interface instead of this
+pub(crate) fn client_config() -> &'static Config {
+    static CONFIG: OnceLock<Config> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let mut path = config_home();
+        path.push(CLIENT_CONFIG_NAME);
+        Config::builder()
+            .add_source(
+                config::File::with_name(&path.to_string_lossy())
+                    .required(true) // TODO consider
+            )
+            .add_source(
+                config::Environment::with_prefix(CONFIG_CLIENT_PREFIX)
+                    .try_parsing(true) // TODO only has: bool, i64, f64 (?)
+                    .separator("_")
+                    .list_separator(",")
+            ) // SPEAKRS_VALUE=2 would deserialize as value = 2, evaluated after (higher prio) config_file
+            .build()
+            .unwrap()
+    })
+}
+/// Intended to be called by server.rs to create its config front-end
+pub(crate) fn server_config() -> &'static Config {
+    static CONFIG: OnceLock<Config> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let mut path = config_home();
+        path.push(SERVER_CONFIG_NAME);
+        Config::builder()
+            .add_source(
+                config::File::with_name(&path.to_string_lossy())
+                    .required(true) // TODO consider
+            )
+            .add_source(
+                config::Environment::with_prefix(CONFIG_SERVER_PREFIX)
+                    .try_parsing(true) // TODO only has: bool, i64, f64 (?)
+                    .separator("_")
+                    .list_separator(",")
+            ) // SPEAKRS_VALUE=2 would deserialize as value = 2, evaluated after (higher prio) config_file
+            .build()
+            .unwrap()
+    })
 }
 
 // ======================================
@@ -359,6 +457,8 @@ impl ServerDB {
             db
         }
     }
+
+    // TODO: server data tree that contains info about server, name etc
 
     pub fn messages(&self) -> Result<DBTree<MessageKey, MessageData>, sled::Error> {
        self.db.open_tree("messages").map(|t| DBTree::with(t))

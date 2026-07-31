@@ -19,6 +19,8 @@ sled = "0.34.7"
 uuid = { version = "1.24.0", features = ["serde", "v4", "v7", "bytemuck"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 bytemuck = "1.25.2"
+config = "0.15.25"
+env = "1.0.1"
 
 [workspace]
 members = [".", "crates/speakrs-gui"]

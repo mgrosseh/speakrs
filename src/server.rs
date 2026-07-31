@@ -21,6 +21,9 @@ pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
     //command_server(args, server).await
 }
 
+// ======================================
+// => Temp Tests
+// ======================================
 fn test_old_messages(server: ServerDB) -> anyhow::Result<()> {
     let first = server.messages()?.first()?;
     if first.is_none() {
@@ -58,7 +61,20 @@ fn test_insert_and_read(server: ServerDB) -> anyhow::Result<()> {
     println!("Had message: @\"{}\" <{}> {}: {}", got_channel.get_name(), got_message1.timestamp, got_user.name, got_message1.content);
     Ok(())
 }
+// ======================================
+// => Server Config
+// ======================================
 
+struct ServerConfig;
+impl ServerConfig {
+    fn set_test(value: &str) {
+        let conf = common::server_config();
+    }
+}
+
+// ======================================
+// => RPC
+// ======================================
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
 #[derive(Clone)]

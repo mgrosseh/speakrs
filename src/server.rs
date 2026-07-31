@@ -2,7 +2,7 @@ use std::{net::{IpAddr, Ipv6Addr, SocketAddr}, sync::{Arc, Mutex}};
 
 use tarpc::{context::Context, server::{Channel, incoming::Incoming}, tokio_serde::formats::Json};
 
-use crate::common::{self, ChannelKey, MessageData, MessageKey, ServerDB, UserKey, World};
+use crate::common::{self, ChannelData, ChannelKey, MessageData, MessageKey, ServerDB, UserData, UserKey, World};
 
 use futures::{future, prelude::*};
 
@@ -15,7 +15,29 @@ pub(crate) struct ServerArguments {
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
     let server = ServerDB::new("test.db");
-    command_server(args, server).await
+    let user_key = UserKey::default();
+    let user1 = UserData::new("user_1".to_string());
+    server.users()?.insert(user_key, user1)?;
+    println!("inserted user1");
+    let channel_key = ChannelKey::default();
+    let channel1 = ChannelData::text("Channel 1".to_string(), "An example channel".to_string());
+    server.channels()?.insert(channel_key, channel1)?;
+    println!("inserted channel1");
+    let message1 = MessageData::now(user_key, "Test Message 1".to_string());
+    let message_key = MessageKey::with_channel(channel_key);
+    server.messages()?.insert(message_key, message1)?;
+    println!("inserted message1");
+
+    println!("reading data");
+    println!();
+
+    let got_channel = server.channels()?.get(channel_key)?.expect("Expected channel that was just inserted");
+    let got_message1 = server.messages()?.get(message_key)?.expect("Expected message value that was just inserted");
+    let message_user_key = got_message1.author;
+    let got_user = server.users()?.get(message_user_key)?.expect("Expected user value that was just inserted");
+    println!("Had message: @\"{}\" <{}> {}: {}", got_channel.get_name(), got_message1.timestamp, got_user.name, got_message1.content);
+    Ok(())
+    //command_server(args, server).await
 }
 
 // This is the type that implements the generated World trait. It is the business logic
@@ -24,14 +46,14 @@ pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
 struct HelloServer(SocketAddr, ServerDB);
 
 impl common::World for HelloServer {
-    async fn hello(self, _: Context, name: String) -> String {
-        // let sleep_time =
-        //     Duration::from_millis(Uniform::new_inclusive(1, 10).unwrap().sample(&mut rand::rng()));
-        // tokio::time::sleep(sleep_time).await;
-        format!("Hello, {name}! You are connected from {}", self.0)
-    }
+async fn hello(self, _: Context, name: String) -> String {
+    // let sleep_time =
+    //     Duration::from_millis(Uniform::new_inclusive(1, 10).unwrap().sample(&mut rand::rng()));
+    // tokio::time::sleep(sleep_time).await;
+    format!("Hello, {name}! You are connected from {}", self.0)
+}
 
-    // async fn pull_messages(self, context: Context, channel_id: ChannelKey, limit: usize) -> ServerResult<Vec<MessageData>>  {
+// async fn pull_messages(self, context: Context, channel_id: ChannelKey, limit: usize) -> ServerResult<Vec<MessageData>>  {
     //     let data = self.1;
     //     let x = data.db.lock().unwrap();
     //     x.pull_messages(channel_id, limit)

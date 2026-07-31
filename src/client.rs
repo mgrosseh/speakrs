@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
-use std::{net::SocketAddr, sync::{Arc, Mutex}, time::SystemTime};
+use std::{net::SocketAddr, path::PathBuf, sync::{Arc, Mutex}, time::SystemTime};
 
 use clap::{Parser};
 
@@ -45,7 +45,44 @@ pub(crate) async fn run(args: ClientArguments) -> anyhow::Result<()> {
 }
 
 // ==============================
-// => Put GUI code here
+// => Config
+// ==============================
+// NOTE: For Devs: Try to annotate every value with `///` and explain what it does
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+pub struct ClientConfig {
+    /// Database related settings
+    database: ClientConfigDatabase,
+}
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+pub struct ClientConfigDatabase {
+    /// Directory to store client databases in, if empty stores databases next to config.
+    /// If set to `/some/dir` creates `/some/dir/client` and `/some/dir/client/<uuid>` for each database.
+    directory: Option<String>
+}
+impl ClientConfig {
+    /// See [`ClientConfig::database`]
+    pub fn get_database_directory(&self) -> PathBuf {
+        let mut path = if self.database.directory.is_some() {
+            PathBuf::from(self.database.directory.clone().unwrap())
+        }
+        else {
+            let mut path = common::config_home();
+            path.push("databases");
+            path
+        };
+        path.push("client");
+        path
+    }
+    /// Get ClientConfig from cached unified Config.
+    /// This is a relative expensive operation (clones ClientConfig from R/W locked Config value), it might be deprecated in the future.
+    /// TODO: currently throws an error if config does not have a client section
+    pub fn get() -> Self {
+        common::Config::clone_client().expect("Running client requires config to have client section")
+    }
+}
+
+// ==============================
+// => GUI
 // ==============================
 fn gui(args: ClientArguments) {
     speakrs_gui::run();

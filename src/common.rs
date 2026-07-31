@@ -1,6 +1,8 @@
+use std::marker::PhantomData;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 
 /* TODO author, description
  * Speakrs - A communication client / server program
@@ -24,16 +26,16 @@ use bytemuck::Zeroable;
 use chrono::DateTime;
 use chrono::Utc;
 use clap::{Parser, Subcommand};
-use config::Source;
 use serde::Deserialize;
 use serde::Serialize;
 use sled::IVec;
 use sled::Tree;
 use uuid::Uuid;
-use config::Config;
 
+use crate::client::ClientConfig;
 use crate::server;
 use crate::client;
+use crate::server::ServerConfig;
 
 pub const PROG: &str = "speakrs";
 pub const PROG_YEAR: &str = "2026";
@@ -63,15 +65,54 @@ pub enum Commands {
 // => Common Config
 // ======================================
 // TODO: using watch.rs example as reference, implement hot-reloading
+//       see https://github.com/rust-cli/config-rs/blob/main/examples/watch.rs to create hot-reloading
 // TODO: full docs
 // We assume valid utf-8 for paths and values
-const CLIENT_CONFIG_NAME: &str = "speakrs_client";
-const SERVER_CONFIG_NAME: &str = "speakrs_server";
 const CONFIG_ENV_VAR_PREFIX: &str = "SPEAKRS";
 const CONFIG_CLIENT_PREFIX: &str = "SPEAKRS_CLIENT";
 const CONFIG_SERVER_PREFIX: &str = "SPEAKRS_SERVER";
 const CONFIG_DIR_OVERRIDE_ENV: &str = "SPEAKRS_CONFIG_HOME";
 const CONFIG_DIR_NAME: &str = "speakrs";
+const CONFIG_NAME: &str = "speakrs.toml";
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+pub struct Config {
+    /// TODO
+    server: Option<server::ServerConfig>,
+    /// TODO
+    client: Option<client::ClientConfig>,
+}
+impl Config {
+    // TODO: writing values / storing to disk
+    pub fn get() -> &'static RwLock<Config> {
+        static CONFIG: OnceLock<RwLock<Config>> = OnceLock::new();
+        CONFIG.get_or_init(|| {
+            let config = Config::load();
+
+            RwLock::new(config)
+        })
+    }
+    fn load() -> Config {
+        let mut path = config_home();
+        path.push(CONFIG_NAME);
+        let contents = std::fs::read_to_string(path)
+            .expect("Should have been able to read file"); // TODO: proper handling
+        toml::from_str(contents.as_str())
+            .expect("Could not parse toml") // TODO: proper handling
+    }
+    fn reload_from_disk() {
+        *Self::get().write().unwrap() = Self::load();
+    }
+
+    pub fn clone_server() -> Option<server::ServerConfig> {
+        let conf = Self::get().read().unwrap();
+        conf.server.clone()
+    }
+    pub fn clone_client() -> Option<client::ClientConfig> {
+        let conf = Self::get().read().unwrap();
+        conf.client.clone()
+    }
+}
+
 // TODO currently this is called multiple times and recalculates path everytime -- should cache!
 pub fn config_home() -> PathBuf {
     let unpack_env = |candidate_path: Result<String, std::env::VarError>, value: &str| {
@@ -106,49 +147,6 @@ pub fn config_home() -> PathBuf {
     // see also target_family for more generic approach
     // other values (of intrest): windows, macos, ios, android, freebsd, openbsd, netbsd
     todo!("Other operating systems are not supported currently.")
-}
-// TODO: move into client / server when version is finalized
-/// Intended to be called by client.rs to create its config front-end, use their config interface instead of this
-pub(crate) fn client_config() -> &'static Config {
-    static CONFIG: OnceLock<Config> = OnceLock::new();
-    CONFIG.get_or_init(|| {
-        let mut path = config_home();
-        path.push(CLIENT_CONFIG_NAME);
-        Config::builder()
-            .add_source(
-                config::File::with_name(&path.to_string_lossy())
-                    .required(true) // TODO consider
-            )
-            .add_source(
-                config::Environment::with_prefix(CONFIG_CLIENT_PREFIX)
-                    .try_parsing(true) // TODO only has: bool, i64, f64 (?)
-                    .separator("_")
-                    .list_separator(",")
-            ) // SPEAKRS_VALUE=2 would deserialize as value = 2, evaluated after (higher prio) config_file
-            .build()
-            .unwrap()
-    })
-}
-/// Intended to be called by server.rs to create its config front-end
-pub(crate) fn server_config() -> &'static Config {
-    static CONFIG: OnceLock<Config> = OnceLock::new();
-    CONFIG.get_or_init(|| {
-        let mut path = config_home();
-        path.push(SERVER_CONFIG_NAME);
-        Config::builder()
-            .add_source(
-                config::File::with_name(&path.to_string_lossy())
-                    .required(true) // TODO consider
-            )
-            .add_source(
-                config::Environment::with_prefix(CONFIG_SERVER_PREFIX)
-                    .try_parsing(true) // TODO only has: bool, i64, f64 (?)
-                    .separator("_")
-                    .list_separator(",")
-            ) // SPEAKRS_VALUE=2 would deserialize as value = 2, evaluated after (higher prio) config_file
-            .build()
-            .unwrap()
-    })
 }
 
 // ======================================
@@ -195,7 +193,7 @@ impl<T> DBValue<T> {
     }
 }
 
-trait DBKeyable {
+pub trait DBKeyable {
     fn from_ref(data: &[u8]) -> Option<Self> where Self: Sized;
 }
 
@@ -264,18 +262,14 @@ impl<T> DBKey<T> {
     }
 }
 
-pub struct DBTree<TKey, TValue>(DBTreeInner<TKey, TValue>);
+pub struct DBTree<TKey, TValue>(Tree, PhantomData<(TKey, TValue)>);
 impl<TKey, TValue> DBTree<TKey, TValue> {
     fn with(tree: Tree) -> Self {
-        Self(DBTreeInner::Tree(tree))
+        Self(tree, PhantomData)
     }
 
     fn this(&self) -> &Tree {
-        match &self.0 {
-            DBTreeInner::Tree(tree) => tree,
-            DBTreeInner::_UnusedKey(_) => panic!("Never construct with DBTreeInner::UnusedKey"),
-            DBTreeInner::_UnusedValue(_) => panic!("Never construct with DBTreeInner::UnusedValue"),
-        }
+        &self.0
     }
 
     pub fn insert(&self, key: TKey, value: TValue) -> anyhow::Result<()> where TKey: AsRef<[u8]>, TValue: serde::Serialize {
@@ -359,13 +353,6 @@ impl<TKey, TValue> DBTree<TKey, TValue> {
     // TODO: transaction translation layer
 }
 
-/// Do not use
-enum DBTreeInner<TKey, TValue> {
-    Tree(Tree),
-    _UnusedKey(TKey),
-    _UnusedValue(TValue),
-}
-
 
 // ======================================
 // => specific value / key implementation
@@ -442,6 +429,13 @@ impl MessageData {
     }
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ServerData {
+    /// Host system unique name
+    pub name: String,
+    pub uuid: Uuid,
+}
+
 // ======================================
 // => database
 // ======================================
@@ -451,21 +445,80 @@ pub struct ServerDB {
 }
 
 impl ServerDB {
-    pub fn new(database_location: &str) -> Self {
+    /// Opens database at [`database_location`].
+    /// If database did not exist before, it is NOT initialized!
+    pub fn open(database_location: &str) -> Self {
         let db = sled::open(database_location).expect("open");
         Self {
             db
         }
     }
 
-    // TODO: server data tree that contains info about server, name etc
+    /// Open database at [`location_location`]`.
+    /// If database did not exist, use data to initialize it.
+    pub fn create_or_open(database_location: PathBuf, data: ServerData) -> Result<Self, sled::Error> {
+        let db = sled::open(database_location).expect("open");
+        let server_db = Self {
+            db
+        };
 
+        if server_db.is_init()? {
+            return Ok(server_db);
+        }
+        server_db.set_server_data(data)?;
+
+        Ok(server_db)
+    }
+
+    /// Open database with name [`name`].
+    /// Automatically (magically) find the location where databases are stored and select the database with name from it.
+    /// If the database does not exist, creates it and initializes it with new server data using current time as uuid seed.
+    pub fn magic_open_server(name: String) -> Result<Self, sled::Error> {
+        let mut path = ServerConfig::get().get_database_directory();
+        path.push(name.as_str());
+        let uuid = Uuid::now_v7();
+        Self::create_or_open(path, ServerData {name, uuid,})
+    }
+    /// Open database with corresponding to [`uuid`].
+    /// Automatically (magically) find the location where databases are stored and select the database with corresponding uuid from it.
+    /// If the database does not exist, creates it and initializes it with new server data.
+    pub fn magic_open_client(uuid: Uuid) -> Result<Self, sled::Error> {
+        let mut path = ClientConfig::get().get_database_directory();
+        let name = uuid.to_string();
+        path.push(name.as_str());
+        Self::create_or_open(path, ServerData {name, uuid,})
+    }
+
+    /// Queries the database, if initialized (server data was set) return true.
+    pub fn is_init(&self) -> Result<bool, sled::Error> {
+        let tree = self.db.open_tree("server_data")?;
+        Ok(tree.get("data")?.is_some())
+    }
+
+    /// Get server data
+    /// Run [`ServerDB::is_init()`] first to check if it's safe to get data
+    pub fn get_server_data(&self) -> anyhow::Result<ServerData> {
+        let tree = self.db.open_tree("server_data")?;
+        let val = tree.get("data")?.expect("Expect data in server_data, run is_init() before accessing or set_server_data() on db.");
+        Ok(DBValue::from(val)?.0)
+    }
+    /// Sets server data.
+    /// Either replaces existing data with new one or initializes the database with corresponding data.
+    pub fn set_server_data(&self, data: ServerData) -> Result<(), sled::Error> {
+        let tree = self.db.open_tree("server_data")?;
+        tree.insert("data", DBValue(data))?;
+        Ok(())
+    }
+
+    /// Get DBTree of all Messages, allowing querying, and storing data.
     pub fn messages(&self) -> Result<DBTree<MessageKey, MessageData>, sled::Error> {
        self.db.open_tree("messages").map(|t| DBTree::with(t))
     }
+    /// Get DBTree of all Channels, allowing querying, and storing data.
     pub fn channels(&self) -> Result<DBTree<ChannelKey, ChannelData>, sled::Error> {
        self.db.open_tree("channels").map(|t| DBTree::with(t))
     }
+    /// Get DBTree of all Users, allowing querying, and storing data.
     pub fn users(&self) -> Result<DBTree<UserKey, UserData>, sled::Error> {
        self.db.open_tree("users").map(|t| DBTree::with(t))
     }

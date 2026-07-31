@@ -1,4 +1,4 @@
-use std::{net::{IpAddr, Ipv6Addr, SocketAddr}, sync::{Arc, Mutex}};
+use std::{net::{IpAddr, Ipv6Addr, SocketAddr}, path::PathBuf, sync::{Arc, Mutex, OnceLock, RwLock}};
 
 use tarpc::{context::Context, server::{Channel, incoming::Incoming}, tokio_serde::formats::Json};
 
@@ -8,13 +8,24 @@ use futures::{future, prelude::*};
 
 #[derive(Debug, clap::Parser)]
 pub(crate) struct ServerArguments {
-    /// Port to serve tcp commands under
-    #[clap(short, long)]
+    // TODO: reconsider port
+    /// Port to serve tcp commands under (default: 57112)
+    #[clap(short, long, default_value_t=57112)]
     port: u16,
+    // TODO: wording may be bad: ;; also write a manual
+    /// name of the server, this will determine where to store server database, it should be unique in any given system.
+    /// Clients will use the internal uuid of the server not the name, so a client can connect with multiple servers of the same name.
+    /// On the same system only one server can exist with this name.
+    ///
+    /// If no name is provided, uses "default_server".
+    ///
+    /// If unsure consult the manual.
+    #[clap(short, long, default_value_t="default_server".to_string())]
+    name: String
 }
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
-    let server = ServerDB::new("test.db");
+    let server = ServerDB::magic_open_server("test.db".to_string())?;
     test_insert_and_read(server.clone())?;
     test_old_messages(server.clone())?;
     Ok(())
@@ -64,11 +75,34 @@ fn test_insert_and_read(server: ServerDB) -> anyhow::Result<()> {
 // ======================================
 // => Server Config
 // ======================================
-
-struct ServerConfig;
+// NOTE: For Devs: Try to annotate every value with `///` and explain what it does
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+pub struct ServerConfig {
+    /// Database related settings
+    database: ServerConfigDatabase,
+}
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+pub struct ServerConfigDatabase {
+    /// Directory to store server databases in, if empty stores databases next to config.
+    /// If set to `/some/dir` creates `/some/dir/server` and `/some/dir/server/<server_name>` for each database
+    directory: Option<String>
+}
 impl ServerConfig {
-    fn set_test(value: &str) {
-        let conf = common::server_config();
+    /// See [`ServerConfig::database`]
+    pub fn get_database_directory(&self) -> PathBuf {
+        if self.database.directory.is_some() {
+            return PathBuf::from(self.database.directory.clone().unwrap());
+        }
+        let mut path = common::config_home();
+        path.push("databases");
+        path.push("server");
+        path
+    }
+    /// Get ServerConfig from cached unified Config.
+    /// This is a relative expensive operation (clones ServerConfig from R/W locked Config value), it might be deprecated in the future.
+    /// TODO: currently throws an error if config does not have a server section
+    pub fn get() -> Self {
+        common::Config::clone_server().expect("Running server requires config to have server section")
     }
 }
 

@@ -15,6 +15,26 @@ pub(crate) struct ServerArguments {
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
     let server = ServerDB::new("test.db");
+    test_insert_and_read(server.clone())?;
+    test_old_messages(server.clone())?;
+    Ok(())
+    //command_server(args, server).await
+}
+
+fn test_old_messages(server: ServerDB) -> anyhow::Result<()> {
+    let first = server.messages()?.first()?;
+    if first.is_none() {
+        println!("No elements in messages")
+    }
+    let key = first.unwrap().0;
+    let v = server.messages()?.get_n_next_from(key, 10)?;
+    for (k, value) in v {
+        println!("Found message: <{}>: {}", value.timestamp, value.content);
+    }
+    Ok(())
+}
+
+fn test_insert_and_read(server: ServerDB) -> anyhow::Result<()> {
     let user_key = UserKey::default();
     let user1 = UserData::new("user_1".to_string());
     server.users()?.insert(user_key, user1)?;
@@ -37,7 +57,6 @@ pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
     let got_user = server.users()?.get(message_user_key)?.expect("Expected user value that was just inserted");
     println!("Had message: @\"{}\" <{}> {}: {}", got_channel.get_name(), got_message1.timestamp, got_user.name, got_message1.content);
     Ok(())
-    //command_server(args, server).await
 }
 
 // This is the type that implements the generated World trait. It is the business logic

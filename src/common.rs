@@ -161,7 +161,7 @@ impl<T> Default for DBKey<T> where T: Default {
 }
 impl<T> DBKey<T> {
     fn from(value: IVec) -> Option<Self> where T: DBKeyable  {
-        let x = &value[..];
+        let x: &[u8] = &value[..];
         T::from_ref(x).map(|v| Self(v))
     }
 }
@@ -225,14 +225,33 @@ impl<TKey, TValue> DBTree<TKey, TValue> {
         Self::map_ivec_pair(self.this().get_lt(DBKey(key)))
     }
 
-    pub fn get_n_next_from(&self, key: TKey) -> anyhow::Result<Vec<(TKey, TValue)>> where TKey: Copy + DBKeyable + AsRef<[u8]>, TValue: for<'a> Deserialize<'a> {
+    pub fn get_n_next_from(&self, key: TKey, n: usize) -> anyhow::Result<Vec<(TKey, TValue)>> where TKey: Copy + DBKeyable + AsRef<[u8]>, TValue: for<'a> Deserialize<'a> {
         let mut out = Vec::new();
         let start = self.get(key)?;
-        if start.is_none() {
+        if start.is_none() || n == 0 {
             return Ok(out);
         }
         out.push((key, start.unwrap()));
-        // TODO WIP
+        if n == 1 {
+            return Ok(out);
+        }
+        let mut count: usize = 1;
+        let mut key = key;
+        loop {
+            let next = Self::map_ivec_pair(self.this().get_gt(key))?;
+            if next.is_none() {
+                break;
+            }
+            count += 1;
+            let next = next.unwrap();
+            key = next.0;
+            let value = next.1;
+
+            out.push((key, value));
+            if count >= n {
+                break;
+            }
+        }
 
         Ok(out)
     }

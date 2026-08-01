@@ -10,9 +10,7 @@ use tarpc::{
     tokio_serde::formats::Json,
 };
 
-use crate::common::{
-    self, ChannelData, ChannelKey, MessageData, MessageKey, ServerDB, UserData, UserKey, World,
-};
+use crate::common::{self, database::ServerDB, rpc::RpcService};
 
 use futures::{future, prelude::*};
 
@@ -40,60 +38,6 @@ pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
     Ok(())
 }
 
-// ======================================
-// => Temp Tests
-// ======================================
-fn test_old_messages(server: ServerDB) -> anyhow::Result<()> {
-    let Some((key, _)) = server.messages()?.first()? else {
-        bail!("No elements in messages")
-    };
-    let messages = server.messages()?;
-    for next in messages.range(key..).take(10) {
-        let (_k, value) = next?;
-        println!("Found message: <{}>: {}", value.timestamp, value.content);
-    }
-    Ok(())
-}
-
-fn test_insert_and_read(server: ServerDB) -> anyhow::Result<()> {
-    let user_key = UserKey::new_now();
-    let user1 = UserData::new("user_1".to_string());
-    server.users()?.insert(user_key, user1)?;
-    println!("inserted user1");
-    let channel_key = ChannelKey::new_now();
-    let channel1 = ChannelData::text("Channel 1".to_string(), "An example channel".to_string());
-    server.channels()?.insert(channel_key, channel1)?;
-    println!("inserted channel1");
-    let message1 = MessageData::now(user_key, "Test Message 1".to_string());
-    let message_key = MessageKey::new_now(channel_key);
-    server.messages()?.insert(message_key, message1)?;
-    println!("inserted message1");
-
-    println!("reading data");
-    println!();
-
-    let got_channel = server
-        .channels()?
-        .get(channel_key)?
-        .expect("Expected channel that was just inserted");
-    let got_message1 = server
-        .messages()?
-        .get(message_key)?
-        .expect("Expected message value that was just inserted");
-    let message_user_key = got_message1.author;
-    let got_user = server
-        .users()?
-        .get(message_user_key)?
-        .expect("Expected user value that was just inserted");
-    println!(
-        "Had message: @\"{}\" <{}> {}: {}",
-        got_channel.get_name(),
-        got_message1.timestamp,
-        got_user.name,
-        got_message1.content
-    );
-    Ok(())
-}
 // ======================================
 // => Server Config
 // ======================================
@@ -137,7 +81,7 @@ impl ServerConfig {
 #[derive(Clone)]
 struct HelloServer(SocketAddr, ServerDB);
 
-impl common::World for HelloServer {
+impl common::rpc::RpcService for HelloServer {
     async fn hello(self, _: Context, name: String) -> String {
         // let sleep_time =
         //     Duration::from_millis(Uniform::new_inclusive(1, 10).unwrap().sample(&mut rand::rng()));

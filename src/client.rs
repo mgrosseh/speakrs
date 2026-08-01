@@ -22,7 +22,7 @@ use clap::Parser;
 use tarpc::tokio_serde::formats::Json;
 use tracing::info;
 
-use crate::common::{self};
+use crate::common::{self, rpc::RpcServiceClient};
 
 #[derive(Debug, Parser)]
 pub(crate) struct ClientArguments {
@@ -97,8 +97,7 @@ async fn tui(args: ClientArguments) -> anyhow::Result<()> {
     let mut transport = tarpc::serde_transport::tcp::connect(args.server_addr, Json::default);
     transport.config_mut().max_frame_length(usize::MAX);
 
-    let _client =
-        common::WorldClient::new(tarpc::client::Config::default(), transport.await?).spawn();
+    let _client = RpcServiceClient::new(tarpc::client::Config::default(), transport.await?).spawn();
     //     let send_client = client.clone();
 
     // let result = async move {

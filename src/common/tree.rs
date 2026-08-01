@@ -2,6 +2,8 @@ use anyhow::Result;
 use sled::{IVec, Tree};
 use std::{marker::PhantomData, ops::RangeBounds};
 
+use crate::common::key::SingletonKey;
+
 pub struct DBTree<K, V, Codec> {
     inner: Tree,
     _marker: PhantomData<(K, V, Codec)>,
@@ -91,4 +93,27 @@ where
     // TODO: iter translation layer
     // TODO: batch translation layer
     // TODO: transaction translation layer
+}
+
+impl<V, Codec> DBTree<SingletonKey, V, Codec>
+where
+    Codec: super::codec::DbValueCodec<V>,
+{
+    pub fn get_single(&self) -> Result<Option<V>> {
+        Ok(self
+            .inner
+            .get(SingletonKey)?
+            .map(Codec::decode_owned)
+            .transpose()?)
+    }
+
+    /// Insert a key to a new value
+    pub fn insert_single(&self, value: V) -> Result<()> {
+        self.insert(SingletonKey, value)
+    }
+
+    /// Insert a key to a new value, returing the old value if present.
+    pub fn insert_replace_single(&self, value: V) -> Result<Option<V>> {
+        self.insert_replace(SingletonKey, value)
+    }
 }

@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
-use sled::IVec;
+use sled::{IVec, transaction::TransactionalTree};
 use std::marker::PhantomData;
-use uuid::{Bytes, Uuid, timestamp::Timestamp};
+use uuid::{Bytes, ContextV7, Uuid, timestamp::Timestamp};
 
 #[derive(Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct UuidKey<T> {
     uid: Uuid,
-    id_type: PhantomData<*mut T>,
+    id_type: PhantomData<T>,
 }
 
 impl<T> std::hash::Hash for UuidKey<T> {
@@ -91,6 +91,12 @@ impl<T> AsRef<[u8]> for UuidKey<T> {
     }
 }
 
+impl<T> From<UuidKey<T>> for IVec {
+    fn from(value: UuidKey<T>) -> Self {
+        IVec::from(value.uid.as_bytes())
+    }
+}
+
 pub struct PrefixedKey<Prefix, T> {
     uuids: [Uuid; 2],
     id_type: PhantomData<(Prefix, T)>,
@@ -153,8 +159,119 @@ impl AsRef<[u8]> for SingletonKey {
     }
 }
 
+impl From<SingletonKey> for IVec {
+    fn from(_value: SingletonKey) -> Self {
+        IVec::default()
+    }
+}
+
 impl From<IVec> for SingletonKey {
     fn from(_value: IVec) -> Self {
         Self
+    }
+}
+
+/// A constructor for key generator contexts.
+/// Separate from [`GenerateKey`], so that we can implement cases where we don't actually need to generate any keys (i.e. all are provided).
+pub trait KeyGenerator {
+    type KeyContext;
+    fn construct(context: &Self::KeyContext, tree: &TransactionalTree) -> Self;
+}
+
+pub trait GenerateKey<Key>: KeyGenerator {
+    fn generate_next(&self) -> Key;
+}
+
+impl KeyGenerator for () {
+    type KeyContext = ();
+    fn construct(_: &(), _tree: &TransactionalTree) -> Self {
+        ()
+    }
+}
+
+pub struct SingletonKeygen;
+
+impl KeyGenerator for SingletonKeygen {
+    type KeyContext = ();
+    fn construct(_: &(), _tree: &TransactionalTree) -> Self {
+        Self
+    }
+}
+impl GenerateKey<SingletonKey> for SingletonKeygen {
+    fn generate_next(&self) -> SingletonKey {
+        SingletonKey
+    }
+}
+
+/// A key that can be automatically created during new record insertion.
+pub struct AutoIncrementKeygen;
+pub struct UuidNowKeygen(ContextV7);
+
+impl KeyGenerator for UuidNowKeygen {
+    type KeyContext = ();
+
+    fn construct(_: &Self::KeyContext, _: &TransactionalTree) -> Self {
+        Self(ContextV7::new())
+    }
+}
+
+impl<T> GenerateKey<UuidKey<T>> for UuidNowKeygen {
+    fn generate_next(&self) -> UuidKey<T> {
+        UuidKey::new_at_time(Timestamp::now(&self.0))
+    }
+}
+
+pub struct PrefixedKeygen<Prefix>(Prefix, UuidNowKeygen);
+
+impl<Prefix> KeyGenerator for PrefixedKeygen<Prefix>
+where
+    Prefix: Clone,
+{
+    type KeyContext = Prefix;
+
+    fn construct(prefix: &Prefix, tree: &TransactionalTree) -> Self {
+        Self(prefix.clone(), UuidNowKeygen::construct(&(), tree))
+    }
+}
+
+impl<P, T> GenerateKey<PrefixedKey<UuidKey<P>, T>> for PrefixedKeygen<UuidKey<P>> {
+    fn generate_next(&self) -> PrefixedKey<UuidKey<P>, T> {
+        self.1.generate_next().with_prefix(self.0.clone())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::array;
+
+    #[test]
+    fn test_db_uuid_ordering() {
+        let keys_in_order: [UuidKey<()>; 50] = array::from_fn(|_| UuidKey::new_now());
+
+        let mut batch = sled::Batch::default();
+        for key in &keys_in_order {
+            batch.insert(*key, &[]);
+        }
+
+        let db = sled::Config::new().temporary(true).open().expect("open");
+        db.apply_batch(batch).expect("Batch failed");
+
+        assert_eq!(
+            db.range(keys_in_order[3]..keys_in_order[7])
+                .keys()
+                .map(|r| r.map(UuidKey::<()>::from))
+                .collect::<Result<Vec<_>, _>>()
+                .as_ref(),
+            Ok(&keys_in_order[3..7].to_vec())
+        );
+
+        assert_eq!(
+            db.iter()
+                .keys()
+                .map(|r| r.map(UuidKey::<()>::from))
+                .collect::<Result<Vec<_>, _>>(),
+            Ok(keys_in_order.to_vec())
+        );
     }
 }

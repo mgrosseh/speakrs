@@ -3,7 +3,6 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::bail;
 use tarpc::{
     context::Context,
     server::{Channel, incoming::Incoming},
@@ -79,14 +78,21 @@ impl ServerConfig {
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
 #[derive(Clone)]
-struct HelloServer(SocketAddr, ServerDB);
+struct HelloServer {
+    addr: SocketAddr,
+    db: ServerDB,
+};
 
 impl common::rpc::RpcService for HelloServer {
     async fn hello(self, _: Context, name: String) -> String {
         // let sleep_time =
         //     Duration::from_millis(Uniform::new_inclusive(1, 10).unwrap().sample(&mut rand::rng()));
         // tokio::time::sleep(sleep_time).await;
-        format!("Hello, {name}! You are connected from {}", self.0)
+        let msg_count = self.db.messages().unwrap().len();
+        format!(
+            "Hello, {name}! You are connected from {}. There are {} total messages.",
+            self.addr, msg_count,
+        )
     }
 
     // async fn pull_messages(self, context: Context, channel_id: ChannelKey, limit: usize) -> ServerResult<Vec<MessageData>>  {

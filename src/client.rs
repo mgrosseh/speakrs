@@ -15,25 +15,22 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
-use std::{
-    io::{self, Write},
-    net::SocketAddr,
-    path::PathBuf,
-    str::FromStr,
-};
-
-use anyhow::{Context, Result};
-use clap::Parser;
-
-use tarpc::tokio_serde::formats::Json;
-use tracing::{Instrument, info, info_span};
-
 use crate::common::{
     self,
     database::ServerDB,
     rpc::RpcServiceClient,
     schema::{ChannelData, ChannelKey, ClientData, UserData, UserKey},
 };
+use anyhow::{Context, Result};
+use clap::Parser;
+use std::{
+    fmt::Debug,
+    io::{self, Write},
+    path::PathBuf,
+};
+use tarpc::tokio_serde::formats::Json;
+use tokio::net::ToSocketAddrs;
+use tracing::{Instrument, info, info_span};
 
 #[derive(Debug, Parser)]
 pub(crate) struct ClientArguments {
@@ -49,6 +46,23 @@ pub(crate) async fn run(args: ClientArguments) -> Result<()> {
     } else {
         tui(args).await
     }
+}
+
+fn print_error(e: impl Debug) {
+    println!("{e:?}");
+}
+
+/// Handle Result error case by printing the error and using "continue". Returns unwrapped result value.
+macro_rules! try_continue {
+    ($expr:expr $(,)?) => {
+        match $expr {
+            Ok(value) => value,
+            Err(e) => {
+                print_error(e);
+                continue;
+            }
+        }
+    };
 }
 
 // ==============================
@@ -109,31 +123,22 @@ async fn tui(args: ClientArguments) -> Result<()> {
         let _ = stdin.read_line(&mut buffer)?;
         let repl_input = buffer.trim();
         let repl_args = repl_input.split(' ').collect::<Vec<&str>>();
-        if repl_args.is_empty() {
-            continue;
-        }
-        let cmd = repl_args[0];
 
-        match cmd {
-            "exit" => break,
-            "help" => {
-                println!("exit, connect <IP>:<PORT>, help");
-                continue;
+        match repl_args[..] {
+            ["exit"] => return Ok(()),
+            ["help", ..] => println!("exit, connect <IP>:<PORT>, help"),
+            ["connect", address] => {
+                try_continue!(
+                    repl_connect(address)
+                        .await
+                        .context("Error during connection")
+                );
             }
-            "connect" => {
-                let ip_str = repl_args[1];
-                let ip: SocketAddr = ip_str.parse()?;
-
-                if let Err(e) = repl_connect(ip).await {
-                    println!("Error during connection: {:?}", e);
-                    continue;
-                }
-            }
-            _ => {
-                println!("Unknown command `{}`. Use `help`.", cmd);
-                continue;
-            }
-        }
+            ["connect"] => println!("Missing connection address. Use `help`.",),
+            ["connect", ..] => println!("Too many parameters. Use `help`.",),
+            [cmd, ..] => println!("Unknown command `{cmd}`. Use `help`.",),
+            [] => {}
+        };
     }
 
     //     let send_client = client.clone();
@@ -166,13 +171,11 @@ async fn tui(args: ClientArguments) -> Result<()> {
     //     Ok(_) => info!("{hello:?}"),
     //     Err(e) => warn!("{:?}", anyhow::Error::from(e)),
     // }
-
-    Ok(())
 }
 
-async fn repl_connect(ip: SocketAddr) -> Result<()> {
-    info!("Connecting to address: {}", ip);
-    let mut transport = tarpc::serde_transport::tcp::connect(ip, Json::default);
+async fn repl_connect(addr: impl ToSocketAddrs + Debug) -> Result<()> {
+    info!("Connecting to address: {:?}", addr);
+    let mut transport = tarpc::serde_transport::tcp::connect(addr, Json::default);
     transport.config_mut().max_frame_length(usize::MAX);
     let client = RpcServiceClient::new(tarpc::client::Config::default(), transport.await?).spawn();
 
@@ -236,51 +239,38 @@ async fn repl_connect(ip: SocketAddr) -> Result<()> {
         let _ = io::stdin().read_line(&mut buffer)?;
         let repl_input = buffer.trim();
         let repl_args = repl_input.split(' ').collect::<Vec<&str>>();
-        if repl_args.is_empty() {
-            continue;
-        }
-        let cmd = repl_args[0];
-
-        match cmd {
-            "exit" => return Ok(()),
-            "channel" => {
-                if let Err(e) = repl_channel(client.clone(), db.clone(), user.clone(), repl_args).await {
-                    println!("Error during channel command: {}", e);
-                    continue;
-                }
+        match repl_args[..] {
+            ["exit"] => return Ok(()),
+            ["help", ..] => println!("exit, help, channel"),
+            ["channel", ..] => {
+                try_continue!(
+                    repl_channel(client.clone(), db.clone(), user.clone(), &repl_args)
+                        .await
+                        .context("Error during channel command")
+                )
             }
-            "help" => {
-                println!("exit, help, channel");
-                continue;
-            }
-            _ => {
-                println!("Unknown command `{}`. Use `help`.", cmd);
-                continue;
-            }
-        }
+            ["connect"] => println!("Missing connection address. Use `help`.",),
+            ["connect", ..] => println!("Too many parameters. Use `help`.",),
+            [cmd, ..] => println!("Unknown command `{cmd}`. Use `help`.",),
+            [] => {}
+        };
     }
 }
 
-async fn repl_channel(client: RpcServiceClient, db: ServerDB, user: UserKey, args: Vec<&str>) -> Result<()> {
-    match args[1] {
-        "sync" => {
-            repl_channel_sync(client, db, user).await
-        }
-        "add" => {
-            repl_channel_add(client, db, user).await
-        }
-        "list" => {
-            repl_channel_list(db).await
-        }
-        "help" => {
-            println!("help, sync, list, add");
-            Ok(())
-        }
-        _ => {
-            println!("Unknown subcommand `channel {}`. Use `channel help`.", args[1]);
-            Ok(())
-        }
+async fn repl_channel(
+    client: RpcServiceClient,
+    db: ServerDB,
+    user: UserKey,
+    args: &[&str],
+) -> Result<()> {
+    match args {
+        ["sync"] => return repl_channel_sync(client, db, user).await,
+        ["add"] => return repl_channel_add(client, db, user).await,
+        ["list"] => return repl_channel_list(db).await,
+        ["help"] | [] => println!("help, sync, list, add"),
+        [cmd, ..] => println!("Unknown subcommand `channel {cmd}`. Use `channel help`."),
     }
+    Ok(())
 }
 
 async fn repl_channel_sync(client: RpcServiceClient, db: ServerDB, user: UserKey) -> Result<()> {
@@ -301,17 +291,13 @@ async fn repl_channel_sync(client: RpcServiceClient, db: ServerDB, user: UserKey
 }
 async fn repl_channel_add(client: RpcServiceClient, db: ServerDB, user: UserKey) -> Result<()> {
     print!("Channel name: ");
-    if let Err(e) = io::stdout().flush() {
-        panic!("could not flush stdout: {}", e);
-    }
+    io::stdout().flush()?;
     let mut buffer = String::new();
     let _ = io::stdin().read_line(&mut buffer)?;
     let name = buffer.clone();
     buffer.clear();
     print!("Channel description: ");
-    if let Err(e) = io::stdout().flush() {
-        panic!("could not flush stdout: {}", e);
-    }
+    io::stdout().flush()?;
     let _ = io::stdin().read_line(&mut buffer)?;
     let desc = buffer;
     let data = ChannelData::text(name.clone(), desc);
@@ -329,9 +315,16 @@ async fn repl_channel_add(client: RpcServiceClient, db: ServerDB, user: UserKey)
 }
 
 async fn repl_channel_list(db: ServerDB) -> Result<()> {
-    let channels = db.channels()?.range(..).collect::<anyhow::Result<Vec<(ChannelKey, ChannelData)>>>()?;
+    let channels = db
+        .channels()?
+        .range(..)
+        .collect::<anyhow::Result<Vec<(ChannelKey, ChannelData)>>>()?;
     for (_, value) in channels {
-        println!("Channel `{}`: \"{}\"", value.get_name(), value.get_description())
+        println!(
+            "Channel `{}`: \"{}\"",
+            value.get_name(),
+            value.get_description()
+        )
     }
     Ok(())
 }

@@ -54,10 +54,9 @@ impl ServerDB {
     /// Open database with corresponding to [`uuid`].
     /// Automatically (magically) find the location where databases are stored and select the database with corresponding uuid from it.
     /// If the database does not exist, creates it and initializes it with new server data.
-    pub fn magic_open_client(uuid: Uuid) -> Result<Self> {
+    pub fn magic_open_client(name: String, uuid: Uuid) -> Result<Self> {
         let mut path = ClientConfig::get().get_database_directory();
-        let name = uuid.to_string();
-        path.push(name.as_str());
+        path.push(uuid.to_string().as_str());
         Self::create_or_open(path, ServerData { name, uuid })
     }
 
@@ -67,16 +66,31 @@ impl ServerDB {
         Ok(tree.get("data")?.is_some())
     }
 
-    /// Get server data
+    /// Get server data.
     /// Run [`ServerDB::is_init()`] first to check if it's safe to get data
     pub fn get_server_data(&self) -> Result<ServerData> {
         let tree = SERVER_DATA_TABLE.open(&self.db)?;
         tree.get_single()?.ok_or_else(|| anyhow!("Expect data in server_data, run is_init() before accessing or set_server_data() on db."))
     }
-    /// Sets server data.
+    /// Set server data.
     /// Either replaces existing data with new one or initializes the database with corresponding data.
     pub fn set_server_data(&self, data: ServerData) -> Result<()> {
         let tree = SERVER_DATA_TABLE.open(&self.db)?;
+        tree.insert_single(data)?;
+        Ok(())
+    }
+
+    // TODO: these two might want to be moved into a client only version of database, unless it would be too impractical
+    /// Get client data, if present.
+    /// Only intended to be used in client side code.
+    pub fn get_client_data(&self) -> Result<Option<ClientData>> {
+        let tree = CLIENT_DATA_TABLE.open(&self.db)?;
+        Ok(tree.get_single()?)
+    }
+    /// Set client data.
+    /// Only intended to be used in client side code.
+    pub fn set_client_data(&self, data: ClientData) -> Result<()> {
+        let tree = CLIENT_DATA_TABLE.open(&self.db)?;
         tree.insert_single(data)?;
         Ok(())
     }

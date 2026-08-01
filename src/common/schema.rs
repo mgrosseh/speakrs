@@ -10,13 +10,13 @@ use crate::common::{
     table::{SerdeTree, TableDecl},
 };
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum ChannelType {
     Text,
     Voice,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChannelData {
     channel_type: ChannelType,
     display_name: String,
@@ -42,6 +42,9 @@ impl ChannelData {
     }
     pub fn get_name(&self) -> &str {
         self.display_name.as_str()
+    }
+    pub fn get_description(&self) -> &str {
+        self.desc.as_str()
     }
 }
 
@@ -82,6 +85,12 @@ pub struct ServerData {
     pub uuid: Uuid,
 }
 
+// TODO: this maybe should be moved into client only code somehow
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ClientData {
+    pub user_key: UserKey,
+}
+
 pub type UserKey = UuidKey<UserData>;
 pub type ChannelKey = UuidKey<ChannelData>;
 pub type MessageKey = PrefixedKey<ChannelKey, MessageData>;
@@ -92,3 +101,5 @@ pub const MESSAGES_TABLE: TableDecl<SerdeTree<MessageData, MessageKey>> =
     TableDecl::named("messages");
 pub const SERVER_DATA_TABLE: TableDecl<SerdeTree<ServerData, SingletonKey>> =
     TableDecl::named("server_data");
+pub const CLIENT_DATA_TABLE: TableDecl<SerdeTree<ClientData, SingletonKey>> =
+    TableDecl::named("client_data");

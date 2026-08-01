@@ -21,6 +21,7 @@ chrono = { version = "0.4.45", features = ["serde"] }
 bytemuck = "1.25.2"
 env = "1.0.1"
 toml = "1.1.4"
+thiserror = "2.0.19"
 
 [workspace]
 members = [".", "crates/speakrs-gui"]

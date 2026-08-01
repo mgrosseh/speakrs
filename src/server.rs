@@ -9,15 +9,15 @@ use tarpc::{
     tokio_serde::formats::Json,
 };
 
-use crate::common::{self, database::ServerDB, rpc::RpcService};
+use crate::common::{self, database::ServerDB, key::{PrefixedKeygen, UuidNowKeygen}, rpc::{RpcService, ServiceResult}, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey}};
 
 use futures::{future, prelude::*};
 
 #[derive(Debug, clap::Parser)]
 pub(crate) struct ServerArguments {
     // TODO: reconsider port
-    /// Port to serve tcp commands under (default: 57112)
-    #[clap(short, long, default_value_t = 57112)]
+    /// Port to serve tcp commands under (default: 7878)
+    #[clap(short, long, default_value_t = 7878)]
     port: u16,
     // TODO: wording may be bad: ;; also write a manual
     /// name of the server, this will determine where to store server database, it should be unique in any given system.
@@ -29,11 +29,15 @@ pub(crate) struct ServerArguments {
     /// If unsure consult the manual.
     #[clap(short, long, default_value_t="default_server".to_string())]
     name: String,
+    /// Be verbose
+    /// Also consider: RUST_LOG=debug to be even more verbose
+    #[clap(short, long, default_value_t=false)]
+    verbose: bool,
 }
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
-    let server = ServerDB::magic_open_server(args.name.to_string())?;
-    command_server(args, server).await?;
+    let db = ServerDB::magic_open_server(args.name.to_string())?;
+    command_server(args, db).await?;
     Ok(())
 }
 
@@ -91,9 +95,6 @@ impl HelloServer {
 
 impl common::rpc::RpcService for HelloServer {
     async fn hello(self, _: Context, name: String) -> String {
-        // let sleep_time =
-        //     Duration::from_millis(Uniform::new_inclusive(1, 10).unwrap().sample(&mut rand::rng()));
-        // tokio::time::sleep(sleep_time).await;
         let msg_count = self.db.messages().unwrap().len();
         format!(
             "Hello, {name}! You are connected from {}. There are {} total messages.",
@@ -101,26 +102,46 @@ impl common::rpc::RpcService for HelloServer {
         )
     }
 
-    // async fn pull_messages(self, context: Context, channel_id: ChannelKey, limit: usize) -> ServerResult<Vec<MessageData>>  {
-    //     let data = self.1;
-    //     let x = data.db.lock().unwrap();
-    //     x.pull_messages(channel_id, limit)
-    // }
+    async fn insert_message(self, _: Context, channel: ChannelKey, data: MessageData) -> ServiceResult {
+        self.db.messages()?.insert_in_context::<PrefixedKeygen<_>, _>(&channel, data).map_err(|e| e.into()).map(|_| ())
+    }
+    async fn get_message(self, _: Context, key: MessageKey) -> ServiceResult<Option<MessageData>> {
+        self.db.messages()?.get(key).map_err(|e| e.into())
+    }
 
-    // async fn send_message(self, context: Context, channel_id: ChannelKey, user: UserKey, content: String) -> ServerResult<MessageKey>  {
-    //     let data = self.1;
-    //     let mut x = data.db.lock().unwrap();
-    //     x.send_message(channel_id, user, content)
-    // }
-}
+    async fn create_user(self, _: Context, data: UserData) -> ServiceResult<UserKey> {
+        self.db.users()?.insert::<UuidNowKeygen, _>(data).map_err(|e| e.into())
+    }
+    async fn get_user(self, _: Context, key: UserKey) -> ServiceResult<Option<UserData>> {
+        self.db.users()?.get(key).map_err(|e| e.into())
+    }
 
-async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
-    tokio::spawn(fut);
+    async fn create_channel(self, _: Context, _user: UserKey, data: ChannelData) -> ServiceResult<ChannelKey> {
+        self.db.channels()?.insert::<UuidNowKeygen, _>(data).map_err(|e| e.into())
+    }
+    async fn get_channel(self, _: Context, key: ChannelKey) -> ServiceResult<Option<ChannelData>> {
+        self.db.channels()?.get(key).map_err(|e| e.into())
+    }
+    async fn get_new_channels_since(self, _: Context, _user: UserKey, since: Option<ChannelKey>) -> ServiceResult<Vec<(ChannelKey, ChannelData)>>  {
+        Ok(if since.is_none() {
+            self.db .channels()? .range(..).collect::<anyhow::Result<Vec<_>>>()?
+        }
+        else {
+            self.db.channels()?.range(since.unwrap()..).skip(1).collect::<anyhow::Result<Vec<_>>>()?
+        })
+    }
+
+    async fn get_server_data(self, _: Context,) -> ServiceResult<ServerData>  {
+        Ok(self.db.get_server_data()?)
+    }
 }
 
 #[tracing::instrument]
 async fn command_server(args: ServerArguments, server: ServerDB) -> anyhow::Result<()> {
     let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port);
+    if args.verbose {
+        println!("Serving under addr {} on port {}", server_addr.0, server_addr.1);
+    }
     let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Json::default).await?;
     tracing::info!("Listening on port {}", listener.local_addr().port());
     listener.config_mut().max_frame_length(usize::MAX);
@@ -135,7 +156,7 @@ async fn command_server(args: ServerArguments, server: ServerDB) -> anyhow::Resu
         .map(|channel| {
             let peer_addr = channel.transport().peer_addr().unwrap();
             let server = HelloServer::new(peer_addr, server.clone());
-            channel.execute(server.serve()).for_each(spawn)
+            channel.execute(server.serve()).for_each(|fut| async { tokio::spawn(fut); })
         })
         // Max 10 channels.
         .buffer_unordered(10)

@@ -10,6 +10,12 @@ pub struct UuidKey<T> {
     id_type: PhantomData<T>,
 }
 
+impl<T> std::fmt::Display for UuidKey<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.uid.fmt(f)
+    }
+}
+
 impl<T> std::hash::Hash for UuidKey<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.uid.hash(state);
@@ -97,9 +103,20 @@ impl<T> From<UuidKey<T>> for IVec {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PrefixedKey<Prefix, T> {
     uuids: [Uuid; 2],
     id_type: PhantomData<(Prefix, T)>,
+}
+
+impl<Prefix, T> std::fmt::Display for PrefixedKey<Prefix, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(")?;
+        self.uuids[0].fmt(f)?;
+        write!(f, ", ")?;
+        self.uuids[1].fmt(f)?;
+        write!(f, ")")
+    }
 }
 
 impl<Prefix, T> Copy for PrefixedKey<Prefix, T> {}

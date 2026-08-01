@@ -15,12 +15,12 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
-use std::{net::SocketAddr, path::PathBuf, sync::{Arc, Mutex}, time::SystemTime};
+use std::{net::SocketAddr, path::PathBuf};
 
-use clap::{Parser};
+use clap::Parser;
 
 use tarpc::tokio_serde::formats::Json;
-use tracing::{Instrument, info, info_span, warn};
+use tracing::info;
 
 use crate::common::{self};
 
@@ -38,8 +38,7 @@ pub(crate) async fn run(args: ClientArguments) -> anyhow::Result<()> {
     if args.gui {
         gui(args);
         return Ok(());
-    }
-    else {
+    } else {
         tui(args).await
     }
 }
@@ -57,15 +56,14 @@ pub struct ClientConfig {
 pub struct ClientConfigDatabase {
     /// Directory to store client databases in, if empty stores databases next to config.
     /// If set to `/some/dir` creates `/some/dir/client` and `/some/dir/client/<uuid>` for each database.
-    directory: Option<String>
+    directory: Option<String>,
 }
 impl ClientConfig {
     /// See [`ClientConfig::database`]
     pub fn get_database_directory(&self) -> PathBuf {
         let mut path = if self.database.directory.is_some() {
             PathBuf::from(self.database.directory.clone().unwrap())
-        }
-        else {
+        } else {
             let mut path = common::config_home();
             path.push("databases");
             path
@@ -77,17 +75,17 @@ impl ClientConfig {
     /// This is a relative expensive operation (clones ClientConfig from R/W locked Config value), it might be deprecated in the future.
     /// TODO: currently throws an error if config does not have a client section
     pub fn get() -> Self {
-        common::Config::clone_client().expect("Running client requires config to have client section")
+        common::Config::clone_client()
+            .expect("Running client requires config to have client section")
     }
 }
 
 // ==============================
 // => GUI
 // ==============================
-fn gui(args: ClientArguments) {
+fn gui(_args: ClientArguments) {
     speakrs_gui::run();
 }
-
 
 // ==============================
 // => Client Data
@@ -99,8 +97,9 @@ async fn tui(args: ClientArguments) -> anyhow::Result<()> {
     let mut transport = tarpc::serde_transport::tcp::connect(args.server_addr, Json::default);
     transport.config_mut().max_frame_length(usize::MAX);
 
-    let client = common::WorldClient::new(tarpc::client::Config::default(), transport.await?).spawn();
-    let send_client = client.clone();
+    let _client =
+        common::WorldClient::new(tarpc::client::Config::default(), transport.await?).spawn();
+    //     let send_client = client.clone();
 
     // let result = async move {
     //     send_client.send_message(tarpc::context::current(), 0, 0, "Test Message".to_string()).await
@@ -110,7 +109,6 @@ async fn tui(args: ClientArguments) -> anyhow::Result<()> {
 
     // let message_id = result.unwrap().unwrap();
     // println!("Send id {}", message_id);
-
 
     // let send_client = client.clone();
     // let result = async move {

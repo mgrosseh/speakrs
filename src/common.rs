@@ -15,29 +15,36 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
-use bytemuck::Pod;
-use bytemuck::Zeroable;
+#![allow(dead_code)]
+
+use anyhow::Result;
+use anyhow::anyhow;
 use chrono::DateTime;
 use chrono::Utc;
 use clap::{Parser, Subcommand};
-use serde::Deserialize;
-use serde::Serialize;
-use sled::IVec;
-use sled::Tree;
-use uuid::Uuid;
-use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::RwLock;
+use uuid::Uuid;
 
-use crate::client::ClientConfig;
-use crate::server;
 use crate::client;
+use crate::client::ClientConfig;
+use crate::common::key::PrefixedKey;
+use crate::common::key::SingletonKey;
+use crate::common::key::UuidKey;
+use crate::common::table::SerdeTree;
+use crate::common::table::TableDecl;
+use crate::server;
 use crate::server::ServerConfig;
 
 pub const PROG: &str = "speakrs";
-pub const PROG_YEAR: &str = "2026";
-pub const PROG_AUTHORS: &str = "Miranda Große-Heilmann, Julie, Viki";
+pub const _PROG_YEAR: &str = "2026";
+pub const _PROG_AUTHORS: &str = "Miranda Große-Heilmann, Julie, Viki";
+
+pub mod codec;
+pub mod key;
+pub mod table;
+pub mod tree;
 
 // ======================================
 // => Run Arguments
@@ -66,9 +73,9 @@ pub enum Commands {
 //       see https://github.com/rust-cli/config-rs/blob/main/examples/watch.rs to create hot-reloading
 // TODO: full docs
 // We assume valid utf-8 for paths and values
-const CONFIG_ENV_VAR_PREFIX: &str = "SPEAKRS";
-const CONFIG_CLIENT_PREFIX: &str = "SPEAKRS_CLIENT";
-const CONFIG_SERVER_PREFIX: &str = "SPEAKRS_SERVER";
+const _CONFIG_ENV_VAR_PREFIX: &str = "SPEAKRS";
+const _CONFIG_CLIENT_PREFIX: &str = "SPEAKRS_CLIENT";
+const _CONFIG_SERVER_PREFIX: &str = "SPEAKRS_SERVER";
 const CONFIG_DIR_OVERRIDE_ENV: &str = "SPEAKRS_CONFIG_HOME";
 const CONFIG_DIR_NAME: &str = "speakrs";
 const CONFIG_NAME: &str = "speakrs.toml";
@@ -92,10 +99,8 @@ impl Config {
     fn load() -> Config {
         let mut path = config_home();
         path.push(CONFIG_NAME);
-        let contents = std::fs::read_to_string(path)
-            .expect("Should have been able to read file"); // TODO: proper handling
-        toml::from_str(contents.as_str())
-            .expect("Could not parse toml") // TODO: proper handling
+        let contents = std::fs::read_to_string(path).expect("Failed to read config file."); // TODO: proper handling
+        toml::from_str(contents.as_str()).expect("Could not parse toml") // TODO: proper handling
     }
     fn reload_from_disk() {
         *Self::get().write().unwrap() = Self::load();
@@ -116,12 +121,14 @@ pub fn config_home() -> PathBuf {
     let unpack_env = |candidate_path: Result<String, std::env::VarError>, value: &str| {
         if candidate_path.is_err() {
             match candidate_path.unwrap_err() {
-                std::env::VarError::NotPresent => {}, // let other cases set home
-                std::env::VarError::NotUnicode(_) => println!("{}: WARNING: {} is not valid unicode, using fallback", PROG, value), // TODO: proper logging
+                std::env::VarError::NotPresent => {} // let other cases set home
+                std::env::VarError::NotUnicode(_) => println!(
+                    "{}: WARNING: {} is not valid unicode, using fallback",
+                    PROG, value
+                ), // TODO: proper logging
             }
             return None;
-        }
-        else {
+        } else {
             return Some(PathBuf::from(candidate_path.unwrap()));
         }
     };
@@ -138,8 +145,11 @@ pub fn config_home() -> PathBuf {
             Some(home) => {
                 let buf = PathBuf::from(home);
                 return buf;
-            },
-            None => panic!("HOME env var cannot be read, use {} env var or fix your environment.", CONFIG_DIR_OVERRIDE_ENV),
+            }
+            None => panic!(
+                "HOME env var cannot be read, use {} env var or fix your environment.",
+                CONFIG_DIR_OVERRIDE_ENV
+            ),
         }
     }
     // see also target_family for more generic approach
@@ -160,210 +170,8 @@ pub trait World {
 }
 
 // ======================================
-// => db / key / value abstract
-// ======================================
-#[derive(Debug, Clone)]
-pub struct DBValue<T>(T);
-impl<'a, T> Deserialize<'a> for DBValue<T> where T: Deserialize<'a> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'a> {
-        Ok(Self(T::deserialize(deserializer)?))
-    }
-}
-impl<T> Serialize for DBValue<T> where T: Serialize {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer {
-        Ok(self.0.serialize(serializer)?)
-    }
-}
-
-impl<T> Into<IVec> for DBValue<T> where T: serde::Serialize {
-    fn into(self) -> IVec {
-        serde_json::to_string(&self).unwrap().as_str().into() // unless serializers of struct members fail, this will never fail
-    }
-}
-impl<T> DBValue<T> {
-    fn from(value: IVec) -> anyhow::Result<Self> where for<'a> T: Deserialize<'a> {
-        let value_str = str::from_utf8(&value[..])?; // serde_json promises to always output valid utf8
-        Ok(serde_json::from_str(value_str)?) // on correct write, this should always deserialize
-    }
-}
-
-pub trait DBKeyable {
-    fn from_ref(data: &[u8]) -> Option<Self> where Self: Sized;
-}
-
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
-pub struct UuidKey(Uuid);
-impl AsRef<[u8]> for UuidKey {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl Default for UuidKey {
-    fn default() -> Self {
-        Self(Uuid::now_v7())
-    }
-}
-impl DBKeyable for UuidKey {
-    fn from_ref(data: &[u8]) -> Option<Self> {
-        if data.len() != 16 {
-            return None;
-        }
-        Some(Self(Uuid::from_slice(data).expect("Should never be null since guard condition is same as error condition")))
-    }
-}
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize, Zeroable, Pod)]
-pub struct UuidKey2(Uuid, Uuid);
-impl AsRef<[u8]> for UuidKey2 {
-    fn as_ref(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
-}
-impl Default for UuidKey2 {
-    fn default() -> Self {
-        Self(Uuid::now_v7(), Uuid::now_v7())
-    }
-}
-impl DBKeyable for UuidKey2 {
-    fn from_ref(data: &[u8]) -> Option<Self> {
-        if data.len() != 32 {
-            return None;
-        }
-        let uuid1 = Uuid::from_slice(&data[..16]).expect("Should never be err because of guard");
-        let uuid2 = Uuid::from_slice(&data[16..]).expect("Should never be err because of guard");
-        Some(Self(uuid1, uuid2))
-    }
-}
-
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
-struct DBKey<T>(T);
-impl<T> AsRef<[u8]> for DBKey<T> where T: AsRef<[u8]> {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
-    }
-}
-impl<T> Default for DBKey<T> where T: Default {
-    fn default() -> Self {
-        Self(T::default())
-    }
-}
-impl<T> DBKey<T> {
-    fn from(value: IVec) -> Option<Self> where T: DBKeyable  {
-        let x: &[u8] = &value[..];
-        T::from_ref(x).map(|v| Self(v))
-    }
-}
-
-pub struct DBTree<TKey, TValue>(Tree, PhantomData<(TKey, TValue)>);
-impl<TKey, TValue> DBTree<TKey, TValue> {
-    fn with(tree: Tree) -> Self {
-        Self(tree, PhantomData)
-    }
-
-    fn this(&self) -> &Tree {
-        &self.0
-    }
-
-    pub fn insert(&self, key: TKey, value: TValue) -> anyhow::Result<()> where TKey: AsRef<[u8]>, TValue: serde::Serialize {
-       Ok(self.this().insert(DBKey(key), DBValue(value)).map(|_| ())?)
-    }
-    pub fn insert_replace(&self, key: TKey, value: TValue) -> anyhow::Result<Option<TValue>> where TKey: AsRef<[u8]>, TValue: serde::Serialize + for<'a> Deserialize<'a> {
-        let old = self.this().insert(DBKey(key), DBValue(value))?;
-        match old {
-            Some(v) => {
-                Ok(Some(DBValue::from(v)?.0))
-            }
-            None => {
-                Ok(None)
-            }
-        }
-    }
-    pub fn get(&self, key: TKey) -> anyhow::Result<Option<TValue>> where TKey: AsRef<[u8]>, for<'a> TValue: Deserialize<'a> {
-        Ok(match self.this().get(DBKey(key))? {
-            Some(v) => Some(DBValue::from(v)?.0),
-            None => None
-        })
-    }
-
-    fn map_ivec_pair(pair: Result<Option<(IVec, IVec)>, sled::Error>) -> anyhow::Result<Option<(TKey, TValue)>> where TKey: DBKeyable, TValue: for<'a> Deserialize<'a> {
-        Ok(match pair? {
-            Some((i_key, i_value)) => {
-                let key = DBKey::from(i_key).expect("we assume correctness of our keys read from db").0;
-                let value = DBValue::from(i_value)?.0;
-                Some((key, value))
-            },
-            None => None
-        })
-    }
-
-    pub fn first(&self) -> anyhow::Result<Option<(TKey, TValue)>> where TKey: DBKeyable, TValue: for<'a> Deserialize<'a> {
-        Self::map_ivec_pair(self.this().first())
-    }
-    pub fn last(&self) -> anyhow::Result<Option<(TKey, TValue)>> where TKey: DBKeyable, TValue: for<'a> Deserialize<'a> {
-        Self::map_ivec_pair(self.this().last())
-    }
-    pub fn next(&self, key: TKey) -> anyhow::Result<Option<(TKey, TValue)>> where TKey: DBKeyable + AsRef<[u8]>, TValue: for<'a> Deserialize<'a> {
-        Self::map_ivec_pair(self.this().get_gt(DBKey(key)))
-    }
-    pub fn prev(&self, key: TKey) -> anyhow::Result<Option<(TKey, TValue)>> where TKey: DBKeyable + AsRef<[u8]>, TValue: for<'a> Deserialize<'a> {
-        Self::map_ivec_pair(self.this().get_lt(DBKey(key)))
-    }
-
-    pub fn get_n_next_from(&self, key: TKey, n: usize) -> anyhow::Result<Vec<(TKey, TValue)>> where TKey: Copy + DBKeyable + AsRef<[u8]>, TValue: for<'a> Deserialize<'a> {
-        let mut out = Vec::new();
-        let start = self.get(key)?;
-        if start.is_none() || n == 0 {
-            return Ok(out);
-        }
-        out.push((key, start.unwrap()));
-        if n == 1 {
-            return Ok(out);
-        }
-        let mut count: usize = 1;
-        let mut key = key;
-        loop {
-            let next = Self::map_ivec_pair(self.this().get_gt(key))?;
-            if next.is_none() {
-                break;
-            }
-            count += 1;
-            let next = next.unwrap();
-            key = next.0;
-            let value = next.1;
-
-            out.push((key, value));
-            if count >= n {
-                break;
-            }
-        }
-
-        Ok(out)
-    }
-
-    // TODO: iter translation layer
-    // TODO: batch translation layer
-    // TODO: transaction translation layer
-}
-
-
-// ======================================
 // => specific value / key implementation
 // ======================================
-
-pub type UserKey = UuidKey;
-pub type ChannelKey = UuidKey;
-pub type MessageKey = UuidKey2;
-impl MessageKey {
-    pub fn with_channel(channel_key: ChannelKey) -> Self {
-        UuidKey2(channel_key.0, Uuid::default())
-    }
-}
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum ChannelType {
@@ -422,8 +230,8 @@ impl MessageData {
         Self {
             timestamp,
             author,
-            content
-        }       
+            content,
+        }
     }
 }
 
@@ -442,23 +250,29 @@ pub struct ServerDB {
     db: sled::Db,
 }
 
+pub type UserKey = UuidKey<UserData>;
+pub type ChannelKey = UuidKey<ChannelData>;
+pub type MessageKey = PrefixedKey<ChannelKey, MessageData>;
+
+const USERS_TABLE: TableDecl<SerdeTree<UserData>> = TableDecl::named("users");
+const CHANNELS_TABLE: TableDecl<SerdeTree<ChannelData>> = TableDecl::named("channels");
+const MESSAGES_TABLE: TableDecl<SerdeTree<MessageData, MessageKey>> = TableDecl::named("messages");
+const SERVER_DATA_TABLE: TableDecl<SerdeTree<ServerData, SingletonKey>> =
+    TableDecl::named("server_data");
+
 impl ServerDB {
     /// Opens database at [`database_location`].
     /// If database did not exist before, it is NOT initialized!
     pub fn open(database_location: &str) -> Self {
         let db = sled::open(database_location).expect("open");
-        Self {
-            db
-        }
+        Self { db }
     }
 
     /// Open database at [`location_location`]`.
     /// If database did not exist, use data to initialize it.
-    pub fn create_or_open(database_location: PathBuf, data: ServerData) -> Result<Self, sled::Error> {
+    pub fn create_or_open(database_location: PathBuf, data: ServerData) -> Result<Self> {
         let db = sled::open(database_location).expect("open");
-        let server_db = Self {
-            db
-        };
+        let server_db = Self { db };
 
         if server_db.is_init()? {
             return Ok(server_db);
@@ -471,53 +285,53 @@ impl ServerDB {
     /// Open database with name [`name`].
     /// Automatically (magically) find the location where databases are stored and select the database with name from it.
     /// If the database does not exist, creates it and initializes it with new server data using current time as uuid seed.
-    pub fn magic_open_server(name: String) -> Result<Self, sled::Error> {
+    pub fn magic_open_server(name: String) -> Result<Self> {
         let mut path = ServerConfig::get().get_database_directory();
         path.push(name.as_str());
         let uuid = Uuid::now_v7();
-        Self::create_or_open(path, ServerData {name, uuid,})
+        Self::create_or_open(path, ServerData { name, uuid })
     }
     /// Open database with corresponding to [`uuid`].
     /// Automatically (magically) find the location where databases are stored and select the database with corresponding uuid from it.
     /// If the database does not exist, creates it and initializes it with new server data.
-    pub fn magic_open_client(uuid: Uuid) -> Result<Self, sled::Error> {
+    pub fn magic_open_client(uuid: Uuid) -> Result<Self> {
         let mut path = ClientConfig::get().get_database_directory();
         let name = uuid.to_string();
         path.push(name.as_str());
-        Self::create_or_open(path, ServerData {name, uuid,})
+        Self::create_or_open(path, ServerData { name, uuid })
     }
 
     /// Queries the database, if initialized (server data was set) return true.
-    pub fn is_init(&self) -> Result<bool, sled::Error> {
+    pub fn is_init(&self) -> sled::Result<bool> {
         let tree = self.db.open_tree("server_data")?;
         Ok(tree.get("data")?.is_some())
     }
 
     /// Get server data
     /// Run [`ServerDB::is_init()`] first to check if it's safe to get data
-    pub fn get_server_data(&self) -> anyhow::Result<ServerData> {
-        let tree = self.db.open_tree("server_data")?;
-        let val = tree.get("data")?.expect("Expect data in server_data, run is_init() before accessing or set_server_data() on db.");
-        Ok(DBValue::from(val)?.0)
+    pub fn get_server_data(&self) -> Result<ServerData> {
+        let tree = SERVER_DATA_TABLE.open(&self.db)?;
+        tree.get(SingletonKey)?.ok_or_else(|| anyhow!("Expect data in server_data, run is_init() before accessing or set_server_data() on db."))
     }
     /// Sets server data.
     /// Either replaces existing data with new one or initializes the database with corresponding data.
-    pub fn set_server_data(&self, data: ServerData) -> Result<(), sled::Error> {
-        let tree = self.db.open_tree("server_data")?;
-        tree.insert("data", DBValue(data))?;
+    pub fn set_server_data(&self, data: ServerData) -> Result<()> {
+        let tree = SERVER_DATA_TABLE.open(&self.db)?;
+        tree.insert(SingletonKey, data)?;
         Ok(())
     }
 
     /// Get DBTree of all Messages, allowing querying, and storing data.
-    pub fn messages(&self) -> Result<DBTree<MessageKey, MessageData>, sled::Error> {
-       self.db.open_tree("messages").map(|t| DBTree::with(t))
+    pub fn messages(&self) -> sled::Result<SerdeTree<MessageData, MessageKey>> {
+        MESSAGES_TABLE.open(&self.db)
     }
     /// Get DBTree of all Channels, allowing querying, and storing data.
-    pub fn channels(&self) -> Result<DBTree<ChannelKey, ChannelData>, sled::Error> {
-       self.db.open_tree("channels").map(|t| DBTree::with(t))
+    pub fn channels(&self) -> sled::Result<SerdeTree<ChannelData>> {
+        CHANNELS_TABLE.open(&self.db)
     }
     /// Get DBTree of all Users, allowing querying, and storing data.
-    pub fn users(&self) -> Result<DBTree<UserKey, UserData>, sled::Error> {
-       self.db.open_tree("users").map(|t| DBTree::with(t))
+    pub fn users(&self) -> sled::Result<SerdeTree<UserData>> {
+        USERS_TABLE.open(&self.db)
+        // self.db.open_tree("users").map(|t| DBTree::from_raw(t))
     }
 }

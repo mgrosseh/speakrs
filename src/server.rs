@@ -1,8 +1,18 @@
-use std::{net::{IpAddr, Ipv6Addr, SocketAddr}, path::PathBuf, sync::{Arc, Mutex, OnceLock, RwLock}};
+use std::{
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    path::PathBuf,
+};
 
-use tarpc::{context::Context, server::{Channel, incoming::Incoming}, tokio_serde::formats::Json};
+use anyhow::bail;
+use tarpc::{
+    context::Context,
+    server::{Channel, incoming::Incoming},
+    tokio_serde::formats::Json,
+};
 
-use crate::common::{self, ChannelData, ChannelKey, MessageData, MessageKey, ServerDB, UserData, UserKey, World};
+use crate::common::{
+    self, ChannelData, ChannelKey, MessageData, MessageKey, ServerDB, UserData, UserKey, World,
+};
 
 use futures::{future, prelude::*};
 
@@ -10,7 +20,7 @@ use futures::{future, prelude::*};
 pub(crate) struct ServerArguments {
     // TODO: reconsider port
     /// Port to serve tcp commands under (default: 57112)
-    #[clap(short, long, default_value_t=57112)]
+    #[clap(short, long, default_value_t = 57112)]
     port: u16,
     // TODO: wording may be bad: ;; also write a manual
     /// name of the server, this will determine where to store server database, it should be unique in any given system.
@@ -21,7 +31,7 @@ pub(crate) struct ServerArguments {
     ///
     /// If unsure consult the manual.
     #[clap(short, long, default_value_t="default_server".to_string())]
-    name: String
+    name: String,
 }
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
@@ -34,40 +44,54 @@ pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
 // => Temp Tests
 // ======================================
 fn test_old_messages(server: ServerDB) -> anyhow::Result<()> {
-    let first = server.messages()?.first()?;
-    if first.is_none() {
-        println!("No elements in messages")
-    }
-    let key = first.unwrap().0;
-    let v = server.messages()?.get_n_next_from(key, 10)?;
-    for (k, value) in v {
+    let Some((key, _)) = server.messages()?.first()? else {
+        bail!("No elements in messages")
+    };
+    let messages = server.messages()?;
+    for next in messages.range(key..).take(10) {
+        let (_k, value) = next?;
         println!("Found message: <{}>: {}", value.timestamp, value.content);
     }
     Ok(())
 }
 
 fn test_insert_and_read(server: ServerDB) -> anyhow::Result<()> {
-    let user_key = UserKey::default();
+    let user_key = UserKey::new_now();
     let user1 = UserData::new("user_1".to_string());
     server.users()?.insert(user_key, user1)?;
     println!("inserted user1");
-    let channel_key = ChannelKey::default();
+    let channel_key = ChannelKey::new_now();
     let channel1 = ChannelData::text("Channel 1".to_string(), "An example channel".to_string());
     server.channels()?.insert(channel_key, channel1)?;
     println!("inserted channel1");
     let message1 = MessageData::now(user_key, "Test Message 1".to_string());
-    let message_key = MessageKey::with_channel(channel_key);
+    let message_key = MessageKey::new_now(channel_key);
     server.messages()?.insert(message_key, message1)?;
     println!("inserted message1");
 
     println!("reading data");
     println!();
 
-    let got_channel = server.channels()?.get(channel_key)?.expect("Expected channel that was just inserted");
-    let got_message1 = server.messages()?.get(message_key)?.expect("Expected message value that was just inserted");
+    let got_channel = server
+        .channels()?
+        .get(channel_key)?
+        .expect("Expected channel that was just inserted");
+    let got_message1 = server
+        .messages()?
+        .get(message_key)?
+        .expect("Expected message value that was just inserted");
     let message_user_key = got_message1.author;
-    let got_user = server.users()?.get(message_user_key)?.expect("Expected user value that was just inserted");
-    println!("Had message: @\"{}\" <{}> {}: {}", got_channel.get_name(), got_message1.timestamp, got_user.name, got_message1.content);
+    let got_user = server
+        .users()?
+        .get(message_user_key)?
+        .expect("Expected user value that was just inserted");
+    println!(
+        "Had message: @\"{}\" <{}> {}: {}",
+        got_channel.get_name(),
+        got_message1.timestamp,
+        got_user.name,
+        got_message1.content
+    );
     Ok(())
 }
 // ======================================
@@ -83,7 +107,7 @@ pub struct ServerConfig {
 pub struct ServerConfigDatabase {
     /// Directory to store server databases in, if empty stores databases next to config.
     /// If set to `/some/dir` creates `/some/dir/server` and `/some/dir/server/<server_name>` for each database
-    directory: Option<String>
+    directory: Option<String>,
 }
 impl ServerConfig {
     /// See [`ServerConfig::database`]
@@ -100,7 +124,8 @@ impl ServerConfig {
     /// This is a relative expensive operation (clones ServerConfig from R/W locked Config value), it might be deprecated in the future.
     /// TODO: currently throws an error if config does not have a server section
     pub fn get() -> Self {
-        common::Config::clone_server().expect("Running server requires config to have server section")
+        common::Config::clone_server()
+            .expect("Running server requires config to have server section")
     }
 }
 
@@ -113,14 +138,14 @@ impl ServerConfig {
 struct HelloServer(SocketAddr, ServerDB);
 
 impl common::World for HelloServer {
-async fn hello(self, _: Context, name: String) -> String {
-    // let sleep_time =
-    //     Duration::from_millis(Uniform::new_inclusive(1, 10).unwrap().sample(&mut rand::rng()));
-    // tokio::time::sleep(sleep_time).await;
-    format!("Hello, {name}! You are connected from {}", self.0)
-}
+    async fn hello(self, _: Context, name: String) -> String {
+        // let sleep_time =
+        //     Duration::from_millis(Uniform::new_inclusive(1, 10).unwrap().sample(&mut rand::rng()));
+        // tokio::time::sleep(sleep_time).await;
+        format!("Hello, {name}! You are connected from {}", self.0)
+    }
 
-// async fn pull_messages(self, context: Context, channel_id: ChannelKey, limit: usize) -> ServerResult<Vec<MessageData>>  {
+    // async fn pull_messages(self, context: Context, channel_id: ChannelKey, limit: usize) -> ServerResult<Vec<MessageData>>  {
     //     let data = self.1;
     //     let x = data.db.lock().unwrap();
     //     x.pull_messages(channel_id, limit)
@@ -131,7 +156,6 @@ async fn hello(self, _: Context, name: String) -> String {
     //     let mut x = data.db.lock().unwrap();
     //     x.send_message(channel_id, user, content)
     // }
-
 }
 
 async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
@@ -140,26 +164,26 @@ async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
 
 #[tracing::instrument]
 async fn command_server(args: ServerArguments, server: ServerDB) -> anyhow::Result<()> {
-   let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port);
-   let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Json::default).await?;
-   tracing::info!("Listening on port {}", listener.local_addr().port());
-   listener.config_mut().max_frame_length(usize::MAX);
-   listener
-   // Ignore accept errors.
-       .filter_map(|r| future::ready(r.ok()))
-       .map(tarpc::server::BaseChannel::with_defaults)
-   // Limit channels to 1 per IP.
-       .max_channels_per_key(1, |t| t.transport().peer_addr().unwrap().ip())
-   // serve is generated by the service attribute. It takes as input any type implementing
-   // the generated World trait.
-       .map(|channel| {
-           let server = HelloServer(channel.transport().peer_addr().unwrap(), server.clone());
-           channel.execute(server.serve()).for_each(spawn)
-       })
-   // Max 10 channels.
-       .buffer_unordered(10)
-       .for_each(|_| async {})
-       .await;
+    let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port);
+    let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Json::default).await?;
+    tracing::info!("Listening on port {}", listener.local_addr().port());
+    listener.config_mut().max_frame_length(usize::MAX);
+    listener
+        // Ignore accept errors.
+        .filter_map(|r| future::ready(r.ok()))
+        .map(tarpc::server::BaseChannel::with_defaults)
+        // Limit channels to 1 per IP.
+        .max_channels_per_key(1, |t| t.transport().peer_addr().unwrap().ip())
+        // serve is generated by the service attribute. It takes as input any type implementing
+        // the generated World trait.
+        .map(|channel| {
+            let server = HelloServer(channel.transport().peer_addr().unwrap(), server.clone());
+            channel.execute(server.serve()).for_each(spawn)
+        })
+        // Max 10 channels.
+        .buffer_unordered(10)
+        .for_each(|_| async {})
+        .await;
 
     Ok(())
 }

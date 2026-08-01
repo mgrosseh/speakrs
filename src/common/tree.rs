@@ -21,11 +21,13 @@ where
     K: AsRef<[u8]> + From<IVec>,
     Codec: super::codec::DbValueCodec<V>,
 {
+    /// Insert a key to a new value
     pub fn insert(&self, key: K, value: V) -> Result<()> {
         self.inner.insert(key, Codec::encode_owned(value)?)?;
         Ok(())
     }
 
+    /// Insert a key to a new value, returing the old value if present.
     pub fn insert_replace(&self, key: K, value: V) -> Result<Option<V>> {
         Ok(self
             .inner
@@ -34,6 +36,7 @@ where
             .transpose()?)
     }
 
+    /// Get a value corresponding to the key, or None if none.
     pub fn get(&self, key: K) -> Result<Option<V>> {
         Ok(self.inner.get(key)?.map(Codec::decode_owned).transpose()?)
     }
@@ -50,22 +53,37 @@ where
         Self::decode_key_value_pair(pair?)
     }
 
+    /// Get the first key-value-pair in this tree.
+    /// Keys are sorted by their bytes
+    /// To retain the ordering of numerical types use big endian reprensentation
     pub fn first(&self) -> Result<Option<(K, V)>> {
         Self::decode_opt_entry(self.inner.first())
     }
+    /// Get the last key-value-pair in this tree.
+    /// Keys are sorted by their bytes
+    /// To retain the ordering of numerical types use big endian reprensentation
     pub fn last(&self) -> Result<Option<(K, V)>> {
         Self::decode_opt_entry(self.inner.last())
     }
-
+    /// Get the next key-value-pair.
+    /// That means, get K that using byte ordering is greater than [`key`], or none if [`key`] is the last key.
+    /// Keys are sorted by their bytes.
+    /// To retain the ordering of numerical types use big endian reprensentation.
     pub fn next(&self, key: K) -> Result<Option<(K, V)>> {
         Self::decode_opt_entry(self.inner.get_gt(key))
     }
 
+    /// Get the previous key-value-pair.
+    /// That means, get K that using byte ordering is less than [`key`], or none if [`key`] is the first key.
+    /// Keys are sorted by their bytes.
+    /// To retain the ordering of numerical types use big endian reprensentation.
     pub fn prev(&self, key: K) -> Result<Option<(K, V)>> {
         Self::decode_opt_entry(self.inner.get_lt(key))
     }
 
     /// Access a range of keys as an iterator.
+    /// Keys are sorted by their bytes.
+    /// To retain the ordering of numerical types use big endian reprensentation.
     pub fn range(&self, range: impl RangeBounds<K>) -> impl Iterator<Item = Result<(K, V)>> {
         self.inner.range(range).map(Self::decode_entry)
     }

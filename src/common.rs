@@ -81,13 +81,15 @@ const CONFIG_DIR_NAME: &str = "speakrs";
 const CONFIG_NAME: &str = "speakrs.toml";
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub struct Config {
-    /// TODO
+    /// Config for server, required if running in server mode
     server: Option<server::ServerConfig>,
-    /// TODO
+    /// Config for client, required if running in client mode
     client: Option<client::ClientConfig>,
 }
 impl Config {
     // TODO: writing values / storing to disk
+    /// Get global config
+    /// The global config might change or get reloaded, be aware if storing values longterm.
     pub fn get() -> &'static RwLock<Config> {
         static CONFIG: OnceLock<RwLock<Config>> = OnceLock::new();
         CONFIG.get_or_init(|| {
@@ -106,10 +108,14 @@ impl Config {
         *Self::get().write().unwrap() = Self::load();
     }
 
+    /// Acquire read lock of global config and clone snapshot of server config
+    /// Config might reload from disk, the cloned config would then be outdated.
     pub fn clone_server() -> Option<server::ServerConfig> {
         let conf = Self::get().read().unwrap();
         conf.server.clone()
     }
+    /// Acquire read lock of global config and clone snapshot of client config
+    /// Config might reload from disk, the cloned config would then be outdated.
     pub fn clone_client() -> Option<client::ClientConfig> {
         let conf = Self::get().read().unwrap();
         conf.client.clone()
@@ -187,6 +193,7 @@ pub struct ChannelData {
 }
 
 impl ChannelData {
+    /// Create a text channel
     pub fn text(display_name: String, desc: String) -> Self {
         Self {
             channel_type: ChannelType::Text,
@@ -194,6 +201,7 @@ impl ChannelData {
             desc,
         }
     }
+    /// Create a voice channel
     pub fn voice(display_name: String, desc: String) -> Self {
         Self {
             channel_type: ChannelType::Voice,
@@ -223,6 +231,7 @@ pub struct MessageData {
     pub content: String,
 }
 impl MessageData {
+    /// Create MessageData with timestamp now
     pub fn now(author: UserKey, content: String) -> Self {
         Self::new(Utc::now(), author, content)
     }

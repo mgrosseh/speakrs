@@ -10,6 +10,7 @@ impl<Tree> TableDecl<Tree> {
 }
 
 impl<V, K, Codec> TableDecl<DBTree<V, K, Codec>> {
+    /// Open the tree in [`db`], if it doesn't exist yet, potentially creates it.
     pub fn open(&self, db: &sled::Db) -> sled::Result<DBTree<V, K, Codec>> {
         db.open_tree(self.0).map(DBTree::from_raw)
     }

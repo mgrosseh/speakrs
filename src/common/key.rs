@@ -124,6 +124,8 @@ impl<P, T> PrefixedKey<UuidKey<P>, T> {
 }
 
 impl<Prefix, T> From<IVec> for PrefixedKey<Prefix, T> {
+    /// Converts this type from the input type
+    /// Panics if [`value.len()`] != 32
     fn from(value: IVec) -> Self {
         let bytes = value
             .as_array::<32>()

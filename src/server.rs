@@ -1,5 +1,5 @@
 use std::{
-    net::{IpAddr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
 };
 
@@ -16,8 +16,8 @@ use futures::{future, prelude::*};
 #[derive(Debug, clap::Parser)]
 pub(crate) struct ServerArguments {
     // TODO: reconsider port
-    /// Port to serve tcp commands under (default: 7878)
-    #[clap(short, long, default_value_t = 7878)]
+    /// Port to serve tcp commands under (default: 51777)
+    #[clap(short, long, default_value_t = 51777)]
     port: u16,
     // TODO: wording may be bad: ;; also write a manual
     /// name of the server, this will determine where to store server database, it should be unique in any given system.
@@ -138,7 +138,8 @@ impl common::rpc::RpcService for HelloServer {
 
 #[tracing::instrument]
 async fn command_server(args: ServerArguments, server: ServerDB) -> anyhow::Result<()> {
-    let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port);
+    //let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port);
+    let server_addr = (IpAddr::V4(Ipv4Addr::LOCALHOST), args.port);
     if args.verbose {
         println!("Serving under addr {} on port {}", server_addr.0, server_addr.1);
     }

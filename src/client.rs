@@ -142,38 +142,9 @@ async fn tui(args: ClientArguments) -> Result<()> {
             [] => {}
         };
     }
-
-    //     let send_client = client.clone();
-
-    // let result = async move {
-    //     send_client.send_message(tarpc::context::current(), 0, 0, "Test Message".to_string()).await
-    // }
-    // .instrument(info_span!("Sending Message"))
-    // .await;
-
-    // let message_id = result.unwrap().unwrap();
-    // println!("Send id {}", message_id);
-
-    // let send_client = client.clone();
-    // let result = async move {
-    //     send_client.pull_messages(tarpc::context::current(), 0, 10).await
-    // }
-    // .instrument(info_span!("Pulling Messages"))
-    // .await;
-
-    // let messages = result.unwrap().unwrap();
-
-    // println!();
-    // println!("Messages ({}):", messages.len());
-    // for m in messages {
-    //     println!("<{}> Author{}: {}", m.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(), m.author, m.content);
-    // }
-
-    // match hello {
-    //     Ok(_) => info!("{hello:?}"),
-    //     Err(e) => warn!("{:?}", anyhow::Error::from(e)),
-    // }
 }
+
+// TODO connection state
 
 async fn repl_connect(addr: impl ToSocketAddrs + Debug) -> Result<()> {
     info!("Connecting to address: {:?}", addr);
@@ -246,7 +217,7 @@ async fn repl_connect(addr: impl ToSocketAddrs + Debug) -> Result<()> {
             ["help", ..] => println!("exit, help, channel"),
             ["channel", ..] => {
                 try_continue!(
-                    repl_channel(client.clone(), db.clone(), user.clone(), &repl_args)
+                    repl_channel(client.clone(), db.clone(), user.clone(), &repl_args[1..])
                         .await
                         .context("Error during channel command")
                 )

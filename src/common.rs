@@ -142,7 +142,9 @@ pub fn config_home() -> PathBuf {
         }
         match unpack_env(env::var("HOME"), "HOME") {
             Some(home) => {
-                let buf = PathBuf::from(home);
+                let mut buf = PathBuf::from(home);
+                buf.push(".config");
+                buf.push(CONFIG_DIR_NAME);
                 return buf;
             }
             None => panic!(

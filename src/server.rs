@@ -33,6 +33,9 @@ pub(crate) struct ServerArguments {
     /// Also consider: RUST_LOG=debug to be even more verbose
     #[clap(short, long, default_value_t=false)]
     verbose: bool,
+    /// Use ipv6 instead of ipv4
+    #[clap(short, long, default_value_t=false)]
+    ipv6: bool,
 }
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
@@ -138,8 +141,12 @@ impl common::rpc::RpcService for HelloServer {
 
 #[tracing::instrument]
 async fn command_server(args: ServerArguments, server: ServerDB) -> anyhow::Result<()> {
-    //let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port);
-    let server_addr = (IpAddr::V4(Ipv4Addr::LOCALHOST), args.port);
+    let server_addr = if args.ipv6 {
+        (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port)
+    }
+    else {
+        (IpAddr::V4(Ipv4Addr::LOCALHOST), args.port)
+    };
     if args.verbose {
         println!("Serving under addr {} on port {}", server_addr.0, server_addr.1);
     }

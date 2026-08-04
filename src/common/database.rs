@@ -31,7 +31,7 @@ impl ServerDB {
     /// Open database at [`location_location`]`.
     /// If database did not exist, use data to initialize it.
     pub fn create_or_open(database_location: impl AsRef<Path>, data: ServerData) -> Result<Self> {
-        let db = sled::open(database_location).expect("open");
+        let db = sled::open(database_location)?;
         let server_db = Self { db };
 
         if server_db.is_init()? {
@@ -61,9 +61,9 @@ impl ServerDB {
     }
 
     /// Queries the database, if initialized (server data was set) return true.
-    pub fn is_init(&self) -> sled::Result<bool> {
-        let tree = self.db.open_tree("server_data")?;
-        Ok(tree.get("data")?.is_some())
+    pub fn is_init(&self) -> Result<bool> {
+        let tree = SERVER_DATA_TABLE.open(&self.db)?;
+        Ok(tree.get_single()?.is_some())
     }
 
     /// Get server data.

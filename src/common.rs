@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
-#![allow(dead_code)]
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -28,8 +27,10 @@ use crate::client;
 use crate::server;
 
 pub const PROG: &str = "speakrs";
-pub const _PROG_YEAR: &str = "2026";
-pub const _PROG_AUTHORS: &str = "Miranda Große-Heilmann, Julie, Viki";
+#[allow(unused)] // TODO
+pub const PROG_YEAR: &str = "2026";
+#[allow(unused)] // TODO
+pub const PROG_AUTHORS: &str = "Miranda Große-Heilmann, Julie, Viki";
 
 pub mod codec;
 pub mod database;
@@ -66,9 +67,6 @@ pub enum Commands {
 //       see https://github.com/rust-cli/config-rs/blob/main/examples/watch.rs to create hot-reloading
 // TODO: full docs
 // We assume valid utf-8 for paths and values
-const _CONFIG_ENV_VAR_PREFIX: &str = "SPEAKRS";
-const _CONFIG_CLIENT_PREFIX: &str = "SPEAKRS_CLIENT";
-const _CONFIG_SERVER_PREFIX: &str = "SPEAKRS_SERVER";
 const CONFIG_DIR_OVERRIDE_ENV: &str = "SPEAKRS_CONFIG_HOME";
 const CONFIG_DIR_NAME: &str = "speakrs";
 const CONFIG_NAME: &str = "speakrs.toml";
@@ -97,6 +95,7 @@ impl Config {
         let contents = std::fs::read_to_string(path).expect("Failed to read config file."); // TODO: proper handling
         toml::from_str(contents.as_str()).expect("Could not parse toml") // TODO: proper handling
     }
+    #[allow(dead_code)]
     fn reload_from_disk() {
         *Self::get().write().unwrap() = Self::load();
     }
@@ -157,7 +156,3 @@ pub fn config_home() -> PathBuf {
     // other values (of intrest): windows, macos, ios, android, freebsd, openbsd, netbsd
     todo!("Other operating systems are not supported currently.")
 }
-
-// ======================================
-// => RPC
-// ======================================

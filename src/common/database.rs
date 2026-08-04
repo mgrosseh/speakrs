@@ -23,16 +23,15 @@ impl ServerDB {
 
     /// Opens database at [`database_location`].
     /// If database did not exist before, it is NOT initialized!
-    pub fn open(database_location: &str) -> Self {
-        let db = sled::open(database_location).expect("open");
-        Self { db }
+    pub fn open(database_location: impl AsRef<Path>) -> sled::Result<Self> {
+        let db = sled::open(database_location)?;
+        Ok(Self { db })
     }
 
     /// Open database at [`location_location`]`.
     /// If database did not exist, use data to initialize it.
     pub fn create_or_open(database_location: impl AsRef<Path>, data: ServerData) -> Result<Self> {
-        let db = sled::open(database_location)?;
-        let server_db = Self { db };
+        let server_db = Self::open(database_location)?;
 
         if server_db.is_init()? {
             return Ok(server_db);

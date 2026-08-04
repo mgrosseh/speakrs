@@ -22,6 +22,7 @@ bytemuck = "1.25.2"
 env = "1.0.1"
 toml = "1.1.4"
 thiserror = "2.0.19"
+linefeed = "0.6.0"
 
 [workspace]
 members = [".", "crates/speakrs-gui"]

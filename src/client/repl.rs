@@ -354,9 +354,6 @@ impl AllCommands {
     fn get(&self, key: &str) -> &'static [Command<'static>] {
         self.map.get(key).unwrap()
     }
-    fn iter(&self) -> std::collections::hash_map::Iter<'_, &str, &[Command<'static>]> {
-        self.map.iter()
-    }
 }
 
 struct Completer;

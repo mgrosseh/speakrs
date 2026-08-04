@@ -95,12 +95,14 @@ where
     /// Get the first key-value-pair in this tree.
     /// Keys are sorted by their bytes
     /// To retain the ordering of numerical types use big endian reprensentation
+    #[allow(unused)] // TODO
     pub fn first(&self) -> Result<Option<(K, V)>> {
         Self::decode_opt_entry(self.inner.first())
     }
     /// Get the last key-value-pair in this tree.
     /// Keys are sorted by their bytes
     /// To retain the ordering of numerical types use big endian reprensentation
+    #[allow(unused)] // TODO
     pub fn last(&self) -> Result<Option<(K, V)>> {
         Self::decode_opt_entry(self.inner.last())
     }
@@ -108,6 +110,7 @@ where
     /// That means, get K that using byte ordering is greater than [`key`], or none if [`key`] is the last key.
     /// Keys are sorted by their bytes.
     /// To retain the ordering of numerical types use big endian reprensentation.
+    #[allow(unused)] // TODO
     pub fn next(&self, key: K) -> Result<Option<(K, V)>> {
         Self::decode_opt_entry(self.inner.get_gt(key))
     }
@@ -116,6 +119,7 @@ where
     /// That means, get K that using byte ordering is less than [`key`], or none if [`key`] is the first key.
     /// Keys are sorted by their bytes.
     /// To retain the ordering of numerical types use big endian reprensentation.
+    #[allow(unused)] // TODO
     pub fn prev(&self, key: K) -> Result<Option<(K, V)>> {
         Self::decode_opt_entry(self.inner.get_lt(key))
     }
@@ -227,6 +231,7 @@ where
     }
 
     /// Insert a key to a new value, returing the old value if present.
+    #[allow(unused)] // TODO
     pub fn insert_replace_single(&self, value: V) -> Result<Option<V>> {
         self.replace(SingletonKey, value)
     }

@@ -33,6 +33,7 @@ impl ChannelData {
         }
     }
     /// Create a voice channel
+    #[allow(unused)] // TODO
     pub fn voice(display_name: String, desc: String) -> Self {
         Self {
             channel_type: ChannelType::Voice,
@@ -66,9 +67,11 @@ pub struct MessageData {
 }
 impl MessageData {
     /// Create MessageData with timestamp now
+    #[allow(unused)] // TODO
     pub fn now(author: UserKey, content: String) -> Self {
         Self::new(Utc::now(), author, content)
     }
+    #[allow(unused)] // TODO
     pub fn new(timestamp: DateTime<Utc>, author: UserKey, content: String) -> Self {
         Self {
             timestamp,

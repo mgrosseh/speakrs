@@ -72,6 +72,7 @@ impl<T> UuidKey<T> {
         }
     }
 
+    #[allow(unused)] // TODO
     fn from_bytes(bytes: uuid::Bytes) -> Self {
         Self::with_uid(Uuid::from_bytes(bytes))
     }
@@ -206,6 +207,7 @@ impl KeyGenerator for () {
     }
 }
 
+#[allow(unused)] // TODO
 pub struct SingletonKeygen;
 
 impl KeyGenerator for SingletonKeygen {
@@ -221,6 +223,7 @@ impl GenerateKey<SingletonKey> for SingletonKeygen {
 }
 
 /// A key that can be automatically created during new record insertion.
+#[allow(unused)] // TODO
 pub struct AutoIncrementKeygen;
 pub struct UuidNowKeygen(ContextV7);
 

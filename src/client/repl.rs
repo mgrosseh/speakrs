@@ -1,7 +1,10 @@
 use super::ClientArguments;
 
 use crate::common::{
-    self, database::ServerDB, rpc::RpcServiceClient, schema::{ChannelData, ChannelKey, ClientData, UserData, UserKey}
+    self,
+    database::ServerDB,
+    rpc::RpcServiceClient,
+    schema::{ChannelData, ChannelKey, ClientData, UserData, UserKey},
 };
 use anyhow::{Context, Result};
 use linefeed::{Completion, Interface, Prompter, ReadResult, Terminal};
@@ -12,7 +15,7 @@ use std::{
 };
 use tarpc::tokio_serde::formats::Json;
 use tokio::net::ToSocketAddrs;
-use tracing::{Instrument, info_span, info, error};
+use tracing::{Instrument, error, info, info_span};
 
 fn print_error(e: impl Debug) {
     println!("{e:?}");
@@ -26,6 +29,30 @@ fn split_first_word(s: &str) -> (&str, &str) {
         None => (s, ""),
     }
 }
+/// Parse at most [`count`] words from [`text`] sequence, returning vec of words and rest.
+/// Ends early if reaching end of [`text`]. Whitespace in-between words is ignored.
+/// Rest may not include trailing whitespace at the end of the last word.
+fn split_opt_words(count: usize, text: &str) -> (Vec<&str>, &str) {
+    let mut vec = Vec::new();
+    if count == 0 {
+        return (vec, text);
+    }
+    let mut rest = text;
+    loop {
+        rest = rest.trim();
+        if rest.is_empty() {
+            return (vec, rest);
+        }
+        let (word, r) = split_first_word(rest);
+        vec.push(word);
+        rest = r;
+        if vec.len() >= count {
+            break;
+        }
+    }
+    (vec, rest)
+}
+
 
 /// Handle Result error case by printing the error and using "continue". Returns unwrapped result value.
 macro_rules! try_continue {
@@ -40,6 +67,36 @@ macro_rules! try_continue {
     };
 }
 
+fn quick_prompt(prompt: &str) -> Result<ReadResult> {
+    let interface = Arc::new(Interface::new("speakrs_prompt")?);
+    interface.set_prompt(prompt)?;
+    interface.set_report_signal(linefeed::Signal::Interrupt, true);
+    Ok(interface.read_line()?)
+}
+/// Opens new prompt, terminates when input matches [`terminate`], returning entered lines as a vec.
+/// Each line begins with [`prompt`]. If ^C i.e. an interrupt signal is send, aborts returning None.
+/// If Eof is received, terminates as well.
+fn multiline_prompt(prompt: &str, terminate: impl Fn(&String) -> bool) -> Result<Option<Vec<String>>> {
+    let interface = Arc::new(Interface::new("speakrs_prompt")?);
+    interface.set_prompt(prompt)?;
+    interface.set_report_signal(linefeed::Signal::Interrupt, true);
+    let mut lines = Vec::new();
+    loop {
+        match interface.read_line()? {
+            ReadResult::Input(line) => {
+                if terminate(&line) {
+                    break;
+                }
+                lines.push(line);
+            },
+            ReadResult::Signal(linefeed::Signal::Interrupt) => return Ok(None),
+            _ => break,
+        }
+    }
+
+    Ok(Some(lines))
+}
+
 const HISTORY_FILE: &str = "repl.history";
 
 #[tracing::instrument]
@@ -51,7 +108,6 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
     println!("Speakrs repl. Use \"help\" for a list of commands.");
     interface.set_completer(Arc::new(Completer));
     interface.set_prompt("> ")?;
-
 
     let mut history_file = common::config_home();
     history_file.push(HISTORY_FILE);
@@ -81,7 +137,7 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
                 let (address, rest) = split_first_word(args);
                 if !rest.trim().is_empty() {
                     println!(
-                        "Unexpected args in comand connect after \"{} {}\": \"{}\"",
+                        "Unexpected args in command connect after \"{} {}\": \"{}\"",
                         cmd, address, rest
                     );
                     continue;
@@ -91,11 +147,15 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
                         .await
                         .context("Error during connect command")
                 );
-                println!("Connected to server. You might want to run sync to load new content.");
+                if connection.has() {
+                    println!("Connected to server. You might want to run sync to load new content.");
+                }
             }
             "channel" => {
                 if !connection.has() {
-                    // TODO
+                    println!(
+                        "You are currently not connected to a server, use `connect` or see `help`."
+                    );
                     continue;
                 }
                 try_continue!(
@@ -113,7 +173,11 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
         }
     }
     if let Err(e) = interface.save_history(history_file.clone()) {
-        error!("Could not save history file {}: {}", history_file.to_string_lossy(), e);
+        error!(
+            "Could not save history file {}: {}",
+            history_file.to_string_lossy(),
+            e
+        );
     } else {
         info!("History saved to {}", history_file.to_string_lossy());
     }
@@ -206,19 +270,27 @@ async fn get_connection(address: impl ToSocketAddrs + Debug) -> Result<ReplConne
         .context("Error while reading local database")?;
     if client_data.is_none() {
         println!("Server has not been registered with, would you like to create a user? [y/n]");
-        let mut buffer = String::new();
-        let _ = io::stdin().read_line(&mut buffer)?;
-        if !(buffer.starts_with("y") || buffer.starts_with("Y")) {
-            println!("Aborted.");
-            return Ok(ReplConnection::empty());
+        match quick_prompt("[y/n]? ")? {
+            ReadResult::Input(x) if !(x.starts_with("y") || x.starts_with("Y")) => {
+                println!("Aborted.");
+                return Ok(ReplConnection::empty());
+            }
+            ReadResult::Input(_) => (),
+            _ => return Ok(ReplConnection::empty()),
         }
-        print!("Username: ");
-        if let Err(e) = io::stdout().flush() {
-            panic!("could not flush stdout: {}", e);
+        let mut username = String::new();
+        while username.is_empty() {
+            match quick_prompt("Username: ")? {
+                ReadResult::Input(x) if common::is_valid_username(&x) => {
+                    username = x;
+                    break;
+                }
+                ReadResult::Input(x) => {
+                    println!("`{}` is not a valid username, try again.", x);
+                }
+                _ => return Ok(ReplConnection::empty()),
+            }
         }
-        buffer.clear();
-        let _ = io::stdin().read_line(&mut buffer)?;
-        let username = buffer;
         let user_data = UserData::new(username.clone());
 
         let user_key = connection
@@ -248,13 +320,12 @@ async fn repl_channel(
     user: UserKey,
     args: &str,
 ) -> Result<()> {
-    let (cmd, _args) = split_first_word(args);
+    let (cmd, args) = split_first_word(args);
     match cmd {
         "sync" => return repl_channel_sync(client, db, user).await,
-        "add" => return repl_channel_add(client, db, user).await, // TODO use args: channel add <name><RET><description><RET><RET>
+        "add" => return repl_channel_add(client, db, user, args).await,
         "list" => return repl_channel_list(db).await,             // TODO: use pager if possible
-        "help" => println!("help, sync, list, add"),
-        cmd => println!("Unknown subcommand `channel {cmd}`. Use `channel help`."),
+        cmd => println!("Unknown subcommand `channel {cmd}`. Use `help`."),
     }
     Ok(())
 }
@@ -275,17 +346,34 @@ async fn repl_channel_sync(client: RpcServiceClient, db: ServerDB, user: UserKey
     println!("Got {} new channels. Use `channel list` to list them.", len);
     Ok(())
 }
-async fn repl_channel_add(client: RpcServiceClient, db: ServerDB, user: UserKey) -> Result<()> {
-    print!("Channel name: ");
-    io::stdout().flush()?;
-    let mut buffer = String::new();
-    let _ = io::stdin().read_line(&mut buffer)?;
-    let name = buffer.clone();
-    buffer.clear();
-    print!("Channel description: ");
-    io::stdout().flush()?;
-    let _ = io::stdin().read_line(&mut buffer)?;
-    let desc = buffer;
+async fn repl_channel_add(client: RpcServiceClient, db: ServerDB, user: UserKey, args: &str) -> Result<()> {
+    let (args, rest) = split_opt_words(1, args);
+    let name = if args.len() == 1 {
+        args.get(0).unwrap().to_string()
+    } else {
+        match quick_prompt("Channel name: ")? {
+            ReadResult::Input(x) if common::is_valid_channel_name(&x) => x,
+            ReadResult::Input(x) => {
+                println!("`{}` is not a valid channel name.\nChannel names must follow rules: {}", x, common::CHANNEL_NAME_RULES);
+                return Ok(());
+            }
+            _ => {
+                println!("Did not add channel.");
+                return Ok(());
+            },
+        }
+    };
+    let desc = if !rest.trim().is_empty() {
+        rest.to_string()
+    } else {
+        println!("Enter channel description (multiline). Send EOF or enter an empty line to confirm, ^C to cancel.");
+        let x = multiline_prompt("desc: ", |x| x.is_empty())?;
+        if x.is_none() {
+            println!("Cancelled. Did not add channel.");
+            return Ok(());
+        }
+        x.unwrap().join("\n")
+    };
     let data = ChannelData::text(name.clone(), desc);
 
     let key = client

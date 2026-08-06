@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
+use tracing::info;
 use uuid::Uuid;
 
 use crate::{
@@ -36,6 +37,7 @@ impl ServerDB {
         if server_db.is_init()? {
             return Ok(server_db);
         }
+        info!("Creating new server data");
         server_db.set_server_data(data)?;
 
         Ok(server_db)
@@ -62,7 +64,8 @@ impl ServerDB {
     /// Queries the database, if initialized (server data was set) return true.
     pub fn is_init(&self) -> Result<bool> {
         let tree = SERVER_DATA_TABLE.open(&self.db)?;
-        Ok(tree.get_single()?.is_some())
+        Ok(tree.has_single()?)
+        //Ok(tree.get_single()?.is_some())
     }
 
     /// Get server data.
@@ -117,6 +120,26 @@ mod test {
 
     use super::*;
     use anyhow::{Context, Result};
+
+    #[test]
+    fn test_client_data() -> Result<()> {
+        let server = ServerDB::mock();
+        let client_data = ClientData {
+            user_key: UserKey::new_now(),
+        };
+        server.set_client_data(client_data.clone())?;
+        let x = server.get_client_data()?;
+        if x.is_none() {
+            println!("Found no data");
+            return Ok(());
+        }
+        let x = x.unwrap();
+        if x.user_key != client_data.user_key {
+            println!("No match: {} vs {}", x.user_key, client_data.user_key);
+        }
+
+        Ok(())
+    }
 
     // ======================================
     // => Temp Tests

@@ -156,3 +156,17 @@ pub fn config_home() -> PathBuf {
     // other values (of intrest): windows, macos, ios, android, freebsd, openbsd, netbsd
     todo!("Other operating systems are not supported currently.")
 }
+
+// =========
+// validity
+// =========
+
+// TODO: massively improve
+pub const USERNAME_RULES: &str = "Must have no whitespace.";
+pub fn is_valid_username(x: &impl AsRef<str>) -> bool {
+    !x.as_ref().contains(" ")
+}
+pub const CHANNEL_NAME_RULES: &str = "Must have no whitespace.";
+pub fn is_valid_channel_name(x: &impl AsRef<str>) -> bool {
+    !x.as_ref().contains(" ")
+}

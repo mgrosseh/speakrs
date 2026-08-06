@@ -217,6 +217,13 @@ impl<V, Codec> DBTree<SingletonKey, V, Codec>
 where
     Codec: DbValueCodec<V>,
 {
+    pub fn has_single(&self) -> Result<bool> {
+        Ok(self
+           .inner
+           .get(SingletonKey)?
+           .is_some())
+    }
+
     pub fn get_single(&self) -> Result<Option<V>> {
         Ok(self
             .inner

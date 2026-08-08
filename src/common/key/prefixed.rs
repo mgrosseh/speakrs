@@ -1,7 +1,6 @@
-use std::marker::PhantomData;
-
 use serde::{Deserialize, Serialize};
 use sled::{IVec, transaction::TransactionalTree};
+use std::marker::PhantomData;
 use uuid::{Bytes, Timestamp, Uuid};
 
 use crate::common::key::{
@@ -82,6 +81,14 @@ impl<Prefix, T> AsRef<[u8]> for PrefixedKey<Prefix, T> {
 }
 
 pub struct PrefixedKeygen<Prefix>(Prefix, UuidNowKeygen);
+impl<Prefix> KeyGenerator<DefaultContext> for PrefixedKeygen<Prefix>
+where
+    PrefixedKeygen<Prefix>: Default,
+{
+    fn construct(_: DefaultContext, _: &TransactionalTree) -> Self {
+        Default::default()
+    }
+}
 
 impl<Prefix> KeyGenerator<Prefix> for PrefixedKeygen<Prefix>
 where

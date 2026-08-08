@@ -45,6 +45,6 @@ impl<T: Pod> DbValueCodec<T> for PodCodec {
     }
 
     fn decode(ivec: &IVec) -> Result<T, Self::Error> {
-        bytemuck::try_from_bytes(ivec).copied()
+        bytemuck::try_pod_read_unaligned(ivec)
     }
 }

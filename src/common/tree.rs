@@ -10,7 +10,10 @@ use sled::{
 };
 use std::{borrow::Borrow, marker::PhantomData, ops::RangeBounds};
 
-pub struct DBTree<K, V, Codec, KeyGen = ()> {
+/// A "placeholder" key generator type that indicates no automatic key generation, i.e. key must always be explicitly provided.
+pub struct KeyMustBeProvided;
+
+pub struct DBTree<K, V, Codec, KeyGen = KeyMustBeProvided> {
     inner: Tree,
     _marker: PhantomData<(K, V, Codec, KeyGen)>,
 }
@@ -146,4 +149,49 @@ where
     // TODO: iter translation layer
     // TODO: batch translation layer
     // TODO: transaction translation layer
+}
+
+#[cfg(test)]
+mod test {
+    use sled::Db;
+
+    use crate::common::{
+        codec::PodCodec,
+        key::integer::{IntegerKey, MonotonicKeygen},
+    };
+
+    use super::*;
+
+    fn mock_db() -> Db {
+        sled::Config::new().temporary(true).open().expect("open")
+    }
+
+    #[test]
+    fn test_autoincrement() -> Result<()> {
+        let db = mock_db();
+        let decl = DBTree::<IntegerKey, i32, PodCodec, MonotonicKeygen>::decl("test_autoincrement");
+        let table = decl.open(&db).expect("open");
+
+        let key1 = table.insert(1).unwrap();
+        let key2 = table.insert(2).unwrap();
+        let key3 = table.insert(3).unwrap();
+        std::assert_matches!(table.get(key1), Ok(Some(1)));
+        std::assert_matches!(table.get(key2), Ok(Some(2)));
+        std::assert_matches!(table.get(key3), Ok(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_without_gen() -> Result<()> {
+        let db = mock_db();
+        let decl = DBTree::<IntegerKey, u64, PodCodec>::decl("test_insert_without_gen");
+        let table = decl.open(&db).expect("open");
+
+        // Intentionally not possible, will fail at compile time:
+        // table.insert(30).unwrap();
+
+        table.set(IntegerKey(2), 20).unwrap();
+
+        Ok(())
+    }
 }

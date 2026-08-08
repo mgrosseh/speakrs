@@ -10,12 +10,6 @@ pub trait KeyGenerator<Context = DefaultContext> {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DefaultContext;
 
-impl<T: Default> KeyGenerator<DefaultContext> for T {
-    fn construct(_: DefaultContext, _: &TransactionalTree) -> Self {
-        Default::default()
-    }
-}
-
 pub trait GenerateKey<Key> {
     fn generate_next(&self) -> Key;
 }

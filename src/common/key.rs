@@ -1,5 +1,5 @@
 pub mod generator;
-// pub mod integer;
+pub mod integer;
 pub mod prefixed;
 pub mod singleton;
 pub mod uuid;

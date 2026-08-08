@@ -3,7 +3,7 @@ use sled::{IVec, transaction::TransactionalTree};
 use std::marker::PhantomData;
 use uuid::{ClockSequence, ContextV7, Timestamp, Uuid};
 
-use crate::common::key::generator::{GenerateKey, KeyGenerator};
+use crate::common::key::generator::{DefaultContext, GenerateKey, KeyGenerator};
 
 #[derive(Serialize, Deserialize)]
 #[serde(transparent)]
@@ -90,7 +90,7 @@ impl<T> AsRef<[u8]> for UuidKey<T> {
 
 impl<T> From<UuidKey<T>> for IVec {
     fn from(value: UuidKey<T>) -> Self {
-        IVec::from(value.uid.as_bytes())
+        IVec::from(value.as_ref())
     }
 }
 
@@ -99,6 +99,12 @@ pub struct UuidNowKeygen<ClockSequence = ContextV7>(ClockSequence);
 impl Default for UuidNowKeygen {
     fn default() -> Self {
         Self(ContextV7::new())
+    }
+}
+
+impl KeyGenerator<DefaultContext> for UuidNowKeygen {
+    fn construct(_: DefaultContext, _: &TransactionalTree) -> Self {
+        Default::default()
     }
 }
 

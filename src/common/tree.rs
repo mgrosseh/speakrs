@@ -1,3 +1,5 @@
+use super::codec::DbValueCodec;
+use crate::common::key::{GenerateKey, KeyGenerator, SingletonKey};
 use anyhow::Result;
 use sled::{
     IVec, Tree,
@@ -5,16 +7,12 @@ use sled::{
 };
 use std::{borrow::Borrow, marker::PhantomData, ops::RangeBounds};
 
-use crate::common::key::{GenerateKey, KeyGenerator, SingletonKey};
-
-use super::codec::DbValueCodec;
-
-pub struct DBTree<K, V, Codec> {
+pub struct DBTree<K, V, Codec, Gen = ()> {
     inner: Tree,
-    _marker: PhantomData<(K, V, Codec)>,
+    _marker: PhantomData<(K, V, Codec, Gen)>,
 }
 
-impl<K, V, Codec> DBTree<K, V, Codec> {
+impl<K, V, Codec, Gen> DBTree<K, V, Codec, Gen> {
     pub(super) fn from_raw(inner: Tree) -> Self {
         Self {
             inner,
@@ -26,7 +24,7 @@ impl<K, V, Codec> DBTree<K, V, Codec> {
     }
 }
 
-impl<K, V, Codec> DBTree<K, V, Codec>
+impl<K, V, Codec, Gen> DBTree<K, V, Codec, Gen>
 where
     K: AsRef<[u8]> + From<IVec>,
     Codec: DbValueCodec<V>,
@@ -38,18 +36,22 @@ where
         Ok(())
     }
 
-    pub fn insert<Gen: KeyGenerator<KeyContext = ()>, InsertImpl: DbInsertable<K, V, Gen>>(
-        &self,
-        insertable: InsertImpl,
-    ) -> Result<InsertImpl::Return> {
+    pub fn insert<InsertImpl>(&self, insertable: InsertImpl) -> Result<InsertImpl::Return>
+    where
+        Gen: KeyGenerator<KeyContext = ()>,
+        InsertImpl: DbInsertable<K, V, Gen>,
+    {
         self.insert_in_context(&(), insertable)
     }
 
-    pub fn insert_in_context<Gen: KeyGenerator, InsertImpl: DbInsertable<K, V, Gen>>(
+    pub fn insert_in_context<InsertImpl: DbInsertable<K, V, Gen>>(
         &self,
         context: &Gen::KeyContext,
         insertable: InsertImpl,
-    ) -> Result<InsertImpl::Return> {
+    ) -> Result<InsertImpl::Return>
+    where
+        Gen: KeyGenerator,
+    {
         self.inner
             .transaction(|tree| {
                 let generator = Gen::construct(context, tree);
@@ -137,7 +139,7 @@ where
 }
 
 /// All potential shapes for `tree.insert` argument.
-pub trait DbInsertable<K, V, Gen: KeyGenerator>: Sized {
+pub trait DbInsertable<K, V, Gen>: Sized {
     type Return;
     fn execute_insert(
         &self,
@@ -147,14 +149,14 @@ pub trait DbInsertable<K, V, Gen: KeyGenerator>: Sized {
 }
 
 // Implementation for direct key,value pair insertion.
-impl<K, V> DbInsertable<K, V, ()> for (K, V)
+impl<K, V, Gen> DbInsertable<K, V, Gen> for (K, V)
 where
     K: AsRef<[u8]> + From<IVec>,
 {
     type Return = ();
     fn execute_insert(
         &self,
-        _generator: &(),
+        _generator: &Gen,
         do_insert_entry: impl Fn(&K, &V) -> Result<()>,
     ) -> Result<Self::Return> {
         do_insert_entry(&self.0, &self.1)
@@ -213,15 +215,12 @@ where
     }
 }
 
-impl<V, Codec> DBTree<SingletonKey, V, Codec>
+impl<V, Codec, Gen> DBTree<SingletonKey, V, Codec, Gen>
 where
     Codec: DbValueCodec<V>,
 {
     pub fn has_single(&self) -> Result<bool> {
-        Ok(self
-           .inner
-           .get(SingletonKey)?
-           .is_some())
+        Ok(self.inner.get(SingletonKey)?.is_some())
     }
 
     pub fn get_single(&self) -> Result<Option<V>> {

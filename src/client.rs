@@ -15,15 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
-use crate::common::{
-    self,
-};
-use anyhow::{Result};
+use crate::common::{self};
+use anyhow::Result;
 use clap::Parser;
-use std::{
-    fmt::Debug,
-    path::PathBuf,
-};
+use std::{fmt::Debug, path::PathBuf};
 
 pub mod repl;
 

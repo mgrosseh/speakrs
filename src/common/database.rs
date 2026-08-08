@@ -4,11 +4,7 @@ use anyhow::{Result, anyhow};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::{
-    client::ClientConfig,
-    common::{schema::*, table::SerdeTree},
-    server::ServerConfig,
-};
+use crate::{client::ClientConfig, common::schema::*, server::ServerConfig};
 
 #[derive(Debug, Clone)]
 pub struct ServerDB {
@@ -98,15 +94,15 @@ impl ServerDB {
     }
 
     /// Get DBTree of all Messages, allowing querying, and storing data.
-    pub fn messages(&self) -> sled::Result<SerdeTree<MessageData, MessageKey>> {
+    pub fn messages(&self) -> sled::Result<MessagesTable> {
         MESSAGES_TABLE.open(&self.db)
     }
     /// Get DBTree of all Channels, allowing querying, and storing data.
-    pub fn channels(&self) -> sled::Result<SerdeTree<ChannelData>> {
+    pub fn channels(&self) -> sled::Result<ChannelsTable> {
         CHANNELS_TABLE.open(&self.db)
     }
     /// Get DBTree of all Users, allowing querying, and storing data.
-    pub fn users(&self) -> sled::Result<SerdeTree<UserData>> {
+    pub fn users(&self) -> sled::Result<UsersTable> {
         USERS_TABLE.open(&self.db)
         // self.db.open_tree("users").map(|t| DBTree::from_raw(t))
     }
@@ -115,8 +111,6 @@ impl ServerDB {
 #[cfg(test)]
 mod test {
     use std::array;
-
-    use crate::common::key::{PrefixedKeygen, UuidNowKeygen};
 
     use super::*;
     use anyhow::{Context, Result};
@@ -154,7 +148,7 @@ mod test {
         let channel_key = ChannelKey::new_now();
         server
             .messages()?
-            .insert_in_context::<PrefixedKeygen<_>, _>(&channel_key, mock_messages)?;
+            .insert_in_context(&channel_key, mock_messages)?;
 
         let (key, _) = server
             .messages()?
@@ -173,7 +167,7 @@ mod test {
         let server = ServerDB::mock();
 
         let user1 = UserData::new("user_1".to_string());
-        let user_key = server.users()?.insert::<UuidNowKeygen, _>(user1)?;
+        let user_key = server.users()?.insert(user1)?;
         println!("inserted user1");
         let channel_key = ChannelKey::new_now();
         let channel1 = ChannelData::text("Channel 1".to_string(), "An example channel".to_string());

@@ -9,7 +9,12 @@ use tarpc::{
     tokio_serde::formats::Json,
 };
 
-use crate::common::{self, database::ServerDB, key::{PrefixedKeygen, UuidNowKeygen}, rpc::{RpcService, ServiceResult}, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey}};
+use crate::common::{
+    self,
+    database::ServerDB,
+    rpc::{RpcService, ServiceResult},
+    schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey},
+};
 
 use futures::{future, prelude::*};
 
@@ -31,10 +36,10 @@ pub(crate) struct ServerArguments {
     name: String,
     /// Be verbose
     /// Also consider: RUST_LOG=debug to be even more verbose
-    #[clap(short, long, default_value_t=false)]
+    #[clap(short, long, default_value_t = false)]
     verbose: bool,
     /// Use ipv6 instead of ipv4
-    #[clap(short, long, default_value_t=false)]
+    #[clap(short, long, default_value_t = false)]
     ipv6: bool,
 }
 
@@ -105,36 +110,61 @@ impl common::rpc::RpcService for HelloServer {
         )
     }
 
-    async fn insert_message(self, _: Context, channel: ChannelKey, data: MessageData) -> ServiceResult {
-        self.db.messages()?.insert_in_context::<PrefixedKeygen<_>, _>(&channel, data).map_err(|e| e.into()).map(|_| ())
+    async fn insert_message(
+        self,
+        _: Context,
+        channel: ChannelKey,
+        data: MessageData,
+    ) -> ServiceResult {
+        self.db
+            .messages()?
+            .insert_in_context(&channel, data)
+            .map_err(|e| e.into())
+            .map(|_| ())
     }
     async fn get_message(self, _: Context, key: MessageKey) -> ServiceResult<Option<MessageData>> {
         self.db.messages()?.get(key).map_err(|e| e.into())
     }
 
     async fn create_user(self, _: Context, data: UserData) -> ServiceResult<UserKey> {
-        self.db.users()?.insert::<UuidNowKeygen, _>(data).map_err(|e| e.into())
+        self.db.users()?.insert(data).map_err(|e| e.into())
     }
     async fn get_user(self, _: Context, key: UserKey) -> ServiceResult<Option<UserData>> {
         self.db.users()?.get(key).map_err(|e| e.into())
     }
 
-    async fn create_channel(self, _: Context, _user: UserKey, data: ChannelData) -> ServiceResult<ChannelKey> {
-        self.db.channels()?.insert::<UuidNowKeygen, _>(data).map_err(|e| e.into())
+    async fn create_channel(
+        self,
+        _: Context,
+        _user: UserKey,
+        data: ChannelData,
+    ) -> ServiceResult<ChannelKey> {
+        self.db.channels()?.insert(data).map_err(|e| e.into())
     }
     async fn get_channel(self, _: Context, key: ChannelKey) -> ServiceResult<Option<ChannelData>> {
         self.db.channels()?.get(key).map_err(|e| e.into())
     }
-    async fn get_new_channels_since(self, _: Context, _user: UserKey, since: Option<ChannelKey>) -> ServiceResult<Vec<(ChannelKey, ChannelData)>>  {
+    async fn get_new_channels_since(
+        self,
+        _: Context,
+        _user: UserKey,
+        since: Option<ChannelKey>,
+    ) -> ServiceResult<Vec<(ChannelKey, ChannelData)>> {
         Ok(if since.is_none() {
-            self.db .channels()? .range(..).collect::<anyhow::Result<Vec<_>>>()?
-        }
-        else {
-            self.db.channels()?.range(since.unwrap()..).skip(1).collect::<anyhow::Result<Vec<_>>>()?
+            self.db
+                .channels()?
+                .range(..)
+                .collect::<anyhow::Result<Vec<_>>>()?
+        } else {
+            self.db
+                .channels()?
+                .range(since.unwrap()..)
+                .skip(1)
+                .collect::<anyhow::Result<Vec<_>>>()?
         })
     }
 
-    async fn get_server_data(self, _: Context,) -> ServiceResult<ServerData>  {
+    async fn get_server_data(self, _: Context) -> ServiceResult<ServerData> {
         Ok(self.db.get_server_data()?)
     }
 }
@@ -143,12 +173,14 @@ impl common::rpc::RpcService for HelloServer {
 async fn command_server(args: ServerArguments, server: ServerDB) -> anyhow::Result<()> {
     let server_addr = if args.ipv6 {
         (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port)
-    }
-    else {
+    } else {
         (IpAddr::V4(Ipv4Addr::LOCALHOST), args.port)
     };
     if args.verbose {
-        println!("Serving under addr {} on port {}", server_addr.0, server_addr.1);
+        println!(
+            "Serving under addr {} on port {}",
+            server_addr.0, server_addr.1
+        );
     }
     let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Json::default).await?;
     tracing::info!("Listening on port {}", listener.local_addr().port());
@@ -164,7 +196,9 @@ async fn command_server(args: ServerArguments, server: ServerDB) -> anyhow::Resu
         .map(|channel| {
             let peer_addr = channel.transport().peer_addr().unwrap();
             let server = HelloServer::new(peer_addr, server.clone());
-            channel.execute(server.serve()).for_each(|fut| async { tokio::spawn(fut); })
+            channel.execute(server.serve()).for_each(|fut| async {
+                tokio::spawn(fut);
+            })
         })
         // Max 10 channels.
         .buffer_unordered(10)

@@ -9,9 +9,7 @@ use crate::common::{
 use anyhow::{Context, Result};
 use linefeed::{Completion, Interface, Prompter, ReadResult, Terminal};
 use std::{
-    collections::HashMap,
     fmt::{Debug, Display},
-    sync::OnceLock,
 };
 use std::{
     io::{self},
@@ -101,6 +99,14 @@ fn multiline_prompt(
     }
 
     Ok(Some(lines))
+}
+
+fn arg_guard(args: &str) -> bool {
+    if !args.is_empty() {
+        println!("Warning got trailing data, try again. (Unexpected: \"{args}\")");
+        return false;
+    }
+    true
 }
 
 struct ReplConnection {
@@ -193,12 +199,8 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
             "quit" => break,
             "connect" => {
                 let (address, rest) = split_first_word(args);
-                if !rest.trim().is_empty() {
-                    println!(
-                        "Unexpected args in command connect after \"{} {}\": \"{}\"",
-                        cmd, address, rest
-                    );
-                    continue;
+                if !arg_guard(rest) {
+                   continue;
                 }
                 connection = try_continue!(
                     get_connection(address)
@@ -211,6 +213,17 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
                     );
                 }
             }
+            // _ => {
+            //     if !connection.has() {
+            //         println!(
+            //             "You are currently not connected to a server, use `connect` or see `help`."
+            //         );
+            //         continue;
+            //     }
+            //     //execute_command(COMMANDS, connection, line).await?;
+            //     // TODO
+            //     todo!()
+            // }
             "channel" => {
                 if !connection.has() {
                     println!(
@@ -263,6 +276,12 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
     Ok(())
 }
 
+#[allow(unused)]
+async fn execute_command(commands: &CommandTree<'_>, connection: &ReplConnection, line: String) -> Result<()> {
+
+    Ok(())
+}
+
 async fn get_connection(address: impl ToSocketAddrs + Debug) -> Result<ReplConnection> {
     let connection = Connection::create(address).await?;
     let data = connection
@@ -297,6 +316,7 @@ async fn get_connection(address: impl ToSocketAddrs + Debug) -> Result<ReplConne
                 }
                 ReadResult::Input(x) => {
                     println!("`{}` is not a valid username, try again.", x);
+                    println!("Usernames must follow these rules: {}", common::USERNAME_RULES);
                 }
                 _ => return Ok(ReplConnection::empty()),
             }
@@ -332,7 +352,7 @@ async fn repl_channel(
 ) -> Result<()> {
     let (cmd, args) = split_first_word(args);
     match cmd {
-        "sync" => return repl_channel_sync(client, db, user).await,
+        "sync" => return repl_channel_sync(client, db, user, args).await,
         "add" => return repl_channel_add(client, db, user, args).await,
         "list" => return repl_channel_list(db).await, // TODO: use pager if possible
         cmd => println!("Unknown subcommand `channel {cmd}`. Use `help`."),
@@ -356,6 +376,7 @@ async fn repl_message(
     Ok(())
 }
 
+#[allow(unused)]
 async fn repl_message_add(
     client: RpcServiceClient,
     db: ServerDB,
@@ -380,19 +401,25 @@ async fn repl_message_add(
     );
     Ok(())
 }
+#[allow(unused)]
 async fn repl_message_sync(
     client: RpcServiceClient,
     db: ServerDB,
     user: UserKey,
     args: &str,
 ) -> Result<()> {
+    println!("|{args}|");
     Ok(())
 }
+#[allow(unused)]
 async fn repl_message_list(db: ServerDB, args: &str) -> Result<()> {
     Ok(())
 }
 
-async fn repl_channel_sync(client: RpcServiceClient, db: ServerDB, user: UserKey) -> Result<()> {
+async fn repl_channel_sync(client: RpcServiceClient, db: ServerDB, user: UserKey, args: &str) -> Result<()> {
+    if !arg_guard(args) {
+        return Ok(());
+    }
     println!("Syncing channels...");
     let last_known_channel = db.channels()?.last()?.map(|kv| kv.0);
     let new_channels = client
@@ -634,12 +661,13 @@ impl<'a> CommandTreeMember<'a> {
 #[derive(Debug, Clone, Copy)]
 enum CommandTreeArgument<'a> {
     Required(&'a str),
+    #[allow(unused)]
     RequiredMany(&'a str),
     Optional(&'a str),
     OptionalMany(&'a str),
     WithDefault(&'a str, &'a str),
 }
-impl<'a> CommandTreeArgument<'a> {
+impl CommandTreeArgument<'_> {
     fn help(&self) -> String {
         match self {
             CommandTreeArgument::Required(s) => format!("{s}"),
@@ -689,13 +717,13 @@ impl<'a> CommandTree<'a> {
         None
     }
 }
-impl<'a> Display for CommandTree<'a> {
+impl Display for CommandTree<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.help_fmt(f)
     }
 }
 
-impl<'a, Term: Terminal> linefeed::Completer<Term> for CommandTree<'a> {
+impl<Term: Terminal> linefeed::Completer<Term> for CommandTree<'_> {
     fn complete(
         &self,
         word: &str,

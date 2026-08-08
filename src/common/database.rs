@@ -74,7 +74,7 @@ impl ServerDB {
     /// Either replaces existing data with new one or initializes the database with corresponding data.
     pub fn set_server_data(&self, data: ServerData) -> Result<()> {
         let tree = SERVER_DATA_TABLE.open(&self.db)?;
-        tree.insert_single(data)?;
+        tree.set_single(data)?;
         Ok(())
     }
 
@@ -89,7 +89,7 @@ impl ServerDB {
     /// Only intended to be used in client side code.
     pub fn set_client_data(&self, data: ClientData) -> Result<()> {
         let tree = CLIENT_DATA_TABLE.open(&self.db)?;
-        tree.insert_single(data)?;
+        tree.set_single(data)?;
         Ok(())
     }
 
@@ -148,7 +148,19 @@ mod test {
         let channel_key = ChannelKey::new_now();
         server
             .messages()?
-            .insert_in_context(&channel_key, mock_messages)?;
+            .insert_in_context(channel_key, mock_messages)?;
+
+        let another_key = MessageKey::new_now(channel_key);
+        server.messages()?.set(
+            another_key,
+            MessageData::now(user_key, format!("Another message")),
+        )?;
+
+        let another_key = MessageKey::new_now(channel_key);
+        server.messages()?.set(
+            another_key,
+            MessageData::now(user_key, format!("Another message")),
+        )?;
 
         let (key, _) = server
             .messages()?

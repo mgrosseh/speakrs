@@ -118,7 +118,7 @@ impl common::rpc::RpcService for HelloServer {
     ) -> ServiceResult {
         self.db
             .messages()?
-            .insert_in_context(&channel, data)
+            .insert_in_context(channel, data)
             .map_err(|e| e.into())
             .map(|_| ())
     }

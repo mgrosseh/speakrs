@@ -8,14 +8,16 @@ use crate::common::{
 };
 use anyhow::{Context, Result};
 use linefeed::{Completion, Interface, Prompter, ReadResult, Terminal};
-use std::{fmt::{Debug, Display}, str::SplitWhitespace};
+use std::{
+    fmt::{Debug, Display}, sync::{OnceLock, RwLock},
+};
 use std::{
     io::{self},
     sync::Arc,
 };
 use tarpc::tokio_serde::formats::Json;
 use tokio::{net::ToSocketAddrs, task::JoinHandle};
-use tracing::{Instrument, error, info, info_span};
+use tracing::{Instrument, error, info, info_span, warn};
 
 fn print_error(e: impl Debug) {
     println!("{e:?}");
@@ -159,14 +161,19 @@ impl Connection {
     }
 }
 
+fn current_connection() -> &'static RwLock<ReplConnection> {
+    static CONNECTION: OnceLock<RwLock<ReplConnection>> = OnceLock::new();
+    CONNECTION.get_or_init(|| {
+        RwLock::new(ReplConnection::empty())
+    })
+}
+
 const HISTORY_FILE: &str = "repl.history";
 
 // TODO: use new COMMANDS system to show more useful help after mistyped command
 
 #[tracing::instrument]
 pub async fn repl(args: ClientArguments) -> Result<()> {
-    let mut connection: ReplConnection = ReplConnection::empty();
-
     let interface = Arc::new(Interface::new("speakrs")?);
 
     println!("Speakrs repl. Use \"help\" for a list of commands.");
@@ -202,25 +209,26 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
                 if !arg_guard(rest) {
                     continue;
                 }
-                connection = try_continue!(
+                let connection = try_continue!(
                     get_connection(address)
                         .await
                         .context("Error during connect command")
                 );
                 if connection.has() {
+                    *current_connection().write().unwrap() = connection;
                     println!(
                         "Connected to server. You might want to run sync to load new content."
                     );
                 }
             }
             _ => {
-                if !connection.has() {
+                if !current_connection().read().unwrap().has() {
                     println!(
                         "You are currently not connected to a server, use `connect` or see `help`."
                     );
                     continue;
                 }
-                execute_command(COMMANDS, &connection, line).await?;
+                execute_command(COMMANDS, line).await?;
             }
         }
     }
@@ -238,20 +246,22 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
 }
 async fn execute_command(
     commands: &CommandTree<'_>,
-    connection: &ReplConnection,
     line: String,
 ) -> Result<()> {
     let option = commands.traverse_to_member(&line);
     if option.is_none() {
         println!("Command not found.");
-        return Ok(())
+        return Ok(());
     }
     let (member, args) = option.unwrap();
     if member.binding.is_none() {
         println!("Command has no associated binding, please report this bug.");
-        return Ok(())
+        return Ok(());
     }
-    if let Err(e) = member.binding.unwrap()(connection.clone(), args).await.context(format!("While executing command: {}", line)) {
+    if let Err(e) = member.binding.unwrap()(current_connection().read().unwrap().clone(), args)
+        .await
+        .context(format!("While executing command: {}", line))
+    {
         print_error(e);
     }
     Ok(())
@@ -449,16 +459,43 @@ enum CommandTreeEither<'a> {
     Argument(&'a CommandTreeArgument<'a>),
 }
 impl<'a> CommandTreeEither<'a> {
-    fn traverse_to(self, mut words: SplitWhitespace<'_>) -> Option<CommandTreeEither<'a>> {
-        let mut node = self;
-        while let Some(current) = words.next() {
-            if let Some(next) = node.find_match(current) {
-                node = next;
-                continue;
-            }
-            return None;
+    fn traverse_to(self, text: &str) -> Option<CommandTreeEither<'a>> {
+        match self {
+            CommandTreeEither::Member(member) => {
+                match member.children {
+                    CommandTreePart::Members(_) => {
+                        let (word, rest) = split_first_word(text);
+                        if word.is_empty() {
+                            return Some(self);
+                        }
+                        if let Some(next) = self.find_match(word) {
+                            next.traverse_to(rest)
+                        } else {
+                            None
+                        }
+                    },
+                    CommandTreePart::Arguments(children) => {
+                        let (mut word, mut rest) = split_first_word(text);
+                        for i in 0..children.len() {
+                            if word.is_empty() {
+                                return Some(CommandTreeEither::Argument(&children[i]));
+                            }
+
+                            (word, rest) = split_first_word(rest);
+                        }
+
+                        None
+                    },
+                }
+            },
+            CommandTreeEither::Argument(_) =>  {
+                if text.trim().is_empty() {
+                    Some(self)
+                } else {
+                    None
+                }
+            },
         }
-        Some(node)
     }
     fn traverse_to_member(self, text: &str) -> Option<(&'a CommandTreeMember<'a>, String)> {
         match self {
@@ -467,7 +504,7 @@ impl<'a> CommandTreeEither<'a> {
                 if text.trim().is_empty() || !member.is_group() {
                     return Some((member, text.to_owned()));
                 }
-            },
+            }
         }
         let (word, rest) = split_first_word(text);
 
@@ -502,7 +539,9 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeEither<'a> {
     fn add_completions_after(&self, mut compls: &mut Vec<Completion>, word: &str) {
         match self {
             CommandTreeEither::Member(member) => member.add_completions_after(&mut compls, word),
-            CommandTreeEither::Argument(argument) => argument.add_completions_after(&mut compls, word),
+            CommandTreeEither::Argument(argument) => {
+                argument.add_completions_after(&mut compls, word)
+            }
         }
     }
 }
@@ -647,7 +686,43 @@ enum ArgumentType {
     ChannelName,
     String,
     Int,
-    IpAddress
+    IpAddress,
+}
+impl ArgumentType {
+    fn matches(self, _word: &str) -> bool {
+        true // TODO: could depending on type include a quick test of sorts to categorize this argument roughly, full test might be too expensive
+    }
+
+    fn add_completions(self, compls: &mut Vec<Completion>, word: &str) {
+        match self {
+            ArgumentType::ChannelName => {
+                match fetch_all_channel_names() {
+                    Ok(names) => {
+                        for name in names {
+                            if word.is_empty() || name.starts_with(word) {
+                                compls.push(Completion::simple(name))
+                            }
+                        }
+                    },
+                    Err(e) => warn!("Could not do ChannelName completion, error during fetch: {:?}", e),
+                }
+            },
+            ArgumentType::String => (),
+            ArgumentType::Int => (),
+            ArgumentType::IpAddress => (), // TODO: maybe expand LOCALHOST or other neat shortcuts into ip_addresses
+        }
+    }
+}
+fn fetch_all_channel_names() -> Result<Vec<String>> {
+    let connection = current_connection().read().unwrap();
+    if !connection.has() {
+        return Ok(vec![]);
+    }
+    let db = connection.db();
+    Ok(db.channels()?
+       .range(..)
+       .map(|result| result.map(|(_, v)| v.get_name().to_owned()))
+       .collect::<Result<Vec<String>>>()?)
 }
 #[derive(Clone)]
 enum CommandTreeArgument<'a> {
@@ -677,6 +752,15 @@ impl<'a> CommandTreeArgument<'a> {
             CommandTreeArgument::WithDefault(_, name, _) => name,
         }
     }
+    fn get_argument_type(&self) -> ArgumentType {
+        match self {
+            CommandTreeArgument::Required(arg_type, _) => *arg_type,
+            CommandTreeArgument::RequiredMany(arg_type, _) => *arg_type,
+            CommandTreeArgument::Optional(arg_type, _) => *arg_type,
+            CommandTreeArgument::OptionalMany(arg_type, _) => *arg_type,
+            CommandTreeArgument::WithDefault(arg_type, _, _) => *arg_type,
+        }
+    }
 }
 impl<'a> CommandTreeCompletion<'a> for CommandTreeArgument<'a> {
     fn get_completion(&self, _word: &str) -> Option<Completion> {
@@ -684,18 +768,17 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeArgument<'a> {
         None // TODO
     }
 
-    fn matches(&self, _word: &str) -> bool {
-        true // always match, so that future completion works; don't need to do double work
-        // TODO: this stance might change if there are multiple branches, probably not
+    fn matches(&self, word: &str) -> bool {
+        self.get_argument_type().matches(word)
     }
 
     fn find_match(&self, _word: &str) -> Option<CommandTreeEither<'a>> {
         None // since we have no children, always None
     }
 
-    fn add_completions_after(&self, _compls: &mut Vec<Completion>, _word: &str) {
-        // since arguments are stored as children of member, instead of linearly
-        // TODO
+    fn add_completions_after(&self, compls: &mut Vec<Completion>, word: &str) {
+        // TODO: I want to show the name of completion here if possible and none
+        self.get_argument_type().add_completions(compls, word);
     }
 }
 
@@ -718,18 +801,19 @@ impl<'a> CommandTree<'a> {
         }
         None
     }
-    #[allow(unused)]
-    fn traverse_to(&self, mut words: SplitWhitespace<'_>) -> Option<CommandTreeEither<'a>> {
-        let first = words.next();
-        if first.is_none() {
-            return None;
-        }
-        let node = self.find_match(first.unwrap());
-        if node.is_none() {
-            return None;
-        }
-        node.unwrap().traverse_to(words)
-    }
+    // TODO: REMOVE or FIX
+    // #[allow(unused)]
+    // fn traverse_to(&self, mut words: SplitWhitespace<'_>) -> Option<CommandTreeEither<'a>> {
+    //     let first = words.next();
+    //     if first.is_none() {
+    //         return None;
+    //     }
+    //     let node = self.find_match(first.unwrap());
+    //     if node.is_none() {
+    //         return None;
+    //     }
+    //     node.unwrap().traverse_to(words)
+    // }
     fn traverse_to_member(&self, text: &str) -> Option<(&'a CommandTreeMember<'a>, String)> {
         if text.trim().is_empty() {
             return None;
@@ -760,32 +844,29 @@ impl<Term: Terminal> linefeed::Completer<Term> for &'_ CommandTree<'_> {
     ) -> Option<Vec<Completion>> {
         let line = prompter.buffer();
 
-        let mut words = line[..start].split_whitespace();
-
         // TODO: with backtracking or recursion we can add many compls by traversing multiple branches that match instead of only the first
 
+        let (first, rest) = split_first_word(&line[..start]);
+
         let mut compls = Vec::new();
-        match words.next() {
-            None => {
-                for child in self.0 {
-                    if let Some(x) = child.get_completion(word) {
-                        compls.push(x);
-                    }
+        if first.is_empty() {
+            for child in self.0 {
+                if let Some(x) = child.get_completion(word) {
+                    compls.push(x);
                 }
-                return Some(compls);
             }
-            Some(current) => {
-                let node = self.find_match(current);
-                if node.is_none() {
-                    return None;
-                }
-                let node = node.unwrap().traverse_to(words);
-                if node.is_none() {
-                    return None;
-                }
-                node.unwrap().add_completions_after(&mut compls, word);
-                return Some(compls);
+            return Some(compls);
+        } else {
+            let node = self.find_match(first);
+            if node.is_none() {
+                return None;
             }
+            let node = node.unwrap().traverse_to(rest);
+            if node.is_none() {
+                return None;
+            }
+            node.unwrap().add_completions_after(&mut compls, word);
+            return Some(compls);
         }
     }
 }
@@ -796,7 +877,10 @@ static COMMANDS: &CommandTree = &CommandTree(&[
     CommandTreeMember::single(
         "connect",
         "Connect to server with IP on PORT.",
-        &[CommandTreeArgument::Required(ArgumentType::IpAddress, "IP:PORT")],
+        &[CommandTreeArgument::Required(
+            ArgumentType::IpAddress,
+            "IP:PORT",
+        )],
     ),
     CommandTreeMember::group(
         "message",
@@ -814,7 +898,10 @@ static COMMANDS: &CommandTree = &CommandTree(&[
             CommandTreeMember::binding(
                 "sync",
                 "Sync messages in CHANNEL with server",
-                &[CommandTreeArgument::Required(ArgumentType::ChannelName, "CHANNEL")],
+                &[CommandTreeArgument::Required(
+                    ArgumentType::ChannelName,
+                    "CHANNEL",
+                )],
                 repl_message_sync,
             ),
             CommandTreeMember::binding(
@@ -825,7 +912,7 @@ static COMMANDS: &CommandTree = &CommandTree(&[
                     CommandTreeArgument::WithDefault(ArgumentType::Int, "COUNT", "5"),
                     CommandTreeArgument::WithDefault(ArgumentType::Int, "OFFSET", "0"),
                 ],
-                repl_message_view
+                repl_message_view,
             ),
         ],
     ),
@@ -840,10 +927,15 @@ static COMMANDS: &CommandTree = &CommandTree(&[
                     CommandTreeArgument::Optional(ArgumentType::String, "NAME"),
                     CommandTreeArgument::OptionalMany(ArgumentType::String, "DESCRIPTION"),
                 ],
-                repl_channel_add
+                repl_channel_add,
             ),
             CommandTreeMember::binding("sync", "Sync channels with server", &[], repl_channel_sync),
-            CommandTreeMember::binding("list", "List all locally known channels (see `sync`)", &[], repl_channel_list),
+            CommandTreeMember::binding(
+                "list",
+                "List all locally known channels (see `sync`)",
+                &[],
+                repl_channel_list,
+            ),
         ],
     ),
 ]);
@@ -872,13 +964,16 @@ mod test {
         binding(connection, args).await.unwrap().unwrap();
     }
 
-
     static TEST_COMMANDS: &CommandTree<'static> = &CommandTree(&[
         CommandTreeMember::single("help", "Testing tests", &[]),
-        CommandTreeMember::group("test_group", "Testing tests", &[
-            CommandTreeMember::single("test", "Testing tests", &[]),
-            CommandTreeMember::single("group", "Testing tests", &[]),
-        ]),
+        CommandTreeMember::group(
+            "test_group",
+            "Testing tests",
+            &[
+                CommandTreeMember::single("test", "Testing tests", &[]),
+                CommandTreeMember::single("group", "Testing tests", &[]),
+            ],
+        ),
     ]);
     #[test]
     fn test_traverse() {

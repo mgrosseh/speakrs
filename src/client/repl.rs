@@ -801,19 +801,13 @@ impl<'a> CommandTree<'a> {
         }
         None
     }
-    // TODO: REMOVE or FIX
-    // #[allow(unused)]
-    // fn traverse_to(&self, mut words: SplitWhitespace<'_>) -> Option<CommandTreeEither<'a>> {
-    //     let first = words.next();
-    //     if first.is_none() {
-    //         return None;
-    //     }
-    //     let node = self.find_match(first.unwrap());
-    //     if node.is_none() {
-    //         return None;
-    //     }
-    //     node.unwrap().traverse_to(words)
-    // }
+    fn traverse_to(&self, first: &str, rest: &str) -> Option<CommandTreeEither<'a>> {
+        let node = self.find_match(first);
+        if node.is_none() {
+            return None;
+        }
+        node.unwrap().traverse_to(rest)
+    }
     fn traverse_to_member(&self, text: &str) -> Option<(&'a CommandTreeMember<'a>, String)> {
         if text.trim().is_empty() {
             return None;
@@ -857,11 +851,7 @@ impl<Term: Terminal> linefeed::Completer<Term> for &'_ CommandTree<'_> {
             }
             return Some(compls);
         } else {
-            let node = self.find_match(first);
-            if node.is_none() {
-                return None;
-            }
-            let node = node.unwrap().traverse_to(rest);
+            let node = self.traverse_to(first, rest);
             if node.is_none() {
                 return None;
             }

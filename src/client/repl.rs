@@ -24,7 +24,7 @@ fn print_error(e: impl Debug) {
 fn split_first_word(s: &str) -> (&str, &str) {
     let s = s.trim();
 
-    match s.find(|ch: char| ch.is_whitespace()) {
+    match s.find(char::is_whitespace) {
         Some(pos) => (&s[..pos], s[pos..].trim_start()),
         None => (s, ""),
     }
@@ -436,7 +436,7 @@ trait CommandTreeCompletion<'a> {
     fn get_completion(&self, word: &str) -> Option<Completion>;
     fn matches(&self, word: &str) -> bool;
     fn find_match(&self, word: &str) -> Option<CommandTreeEither<'a>>;
-    fn add_completions(&self, compls: &mut Vec<Completion>, word: &str);
+    fn add_completions_after(&self, compls: &mut Vec<Completion>, word: &str);
 }
 #[derive(Clone)]
 enum CommandTreePart<'a> {
@@ -499,10 +499,10 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeEither<'a> {
             CommandTreeEither::Argument(argument) => argument.find_match(word),
         }
     }
-    fn add_completions(&self, mut compls: &mut Vec<Completion>, word: &str) {
+    fn add_completions_after(&self, mut compls: &mut Vec<Completion>, word: &str) {
         match self {
-            CommandTreeEither::Member(member) => member.add_completions(&mut compls, word),
-            CommandTreeEither::Argument(argument) => argument.add_completions(&mut compls, word),
+            CommandTreeEither::Member(member) => member.add_completions_after(&mut compls, word),
+            CommandTreeEither::Argument(argument) => argument.add_completions_after(&mut compls, word),
         }
     }
 }
@@ -582,9 +582,9 @@ impl<'a> CommandTreeMember<'a> {
                     command.push(' ');
                     command.push_str(&child.help());
                 }
-                let dofill = fill - depth - command.len() - 1; // -1 since below we add a space in write!
-                if dofill > 0 {
-                    command.push_str(&" ".repeat(dofill));
+                let fill_remove = depth + command.len() + 1; // +1 since below we add a space in write!
+                if fill_remove <= fill {
+                    command.push_str(&" ".repeat(fill - fill_remove));
                 }
                 write!(f, "{prefix}{command} {}", self.desc)?;
             }
@@ -623,7 +623,7 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeMember<'a> {
         }
         None
     }
-    fn add_completions(&self, compls: &mut Vec<Completion>, word: &str) {
+    fn add_completions_after(&self, compls: &mut Vec<Completion>, word: &str) {
         match self.children {
             CommandTreePart::Arguments(arguments) => {
                 for arg in arguments {
@@ -642,29 +642,45 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeMember<'a> {
         }
     }
 }
-
+#[derive(Clone, Copy)]
+enum ArgumentType {
+    ChannelName,
+    String,
+    Int,
+    IpAddress
+}
 #[derive(Clone)]
 enum CommandTreeArgument<'a> {
-    Required(&'a str),
+    Required(ArgumentType, &'a str),
     #[allow(unused)]
-    RequiredMany(&'a str),
-    Optional(&'a str),
-    OptionalMany(&'a str),
-    WithDefault(&'a str, &'a str),
+    RequiredMany(ArgumentType, &'a str),
+    Optional(ArgumentType, &'a str),
+    OptionalMany(ArgumentType, &'a str),
+    WithDefault(ArgumentType, &'a str, &'a str),
 }
-impl CommandTreeArgument<'_> {
+impl<'a> CommandTreeArgument<'a> {
     fn help(&self) -> String {
         match self {
-            CommandTreeArgument::Required(s) => format!("{s}"),
-            CommandTreeArgument::RequiredMany(s) => format!("{s}..."),
-            CommandTreeArgument::Optional(s) => format!("[{s}]"),
-            CommandTreeArgument::OptionalMany(s) => format!("[{s}...]"),
-            CommandTreeArgument::WithDefault(s, d) => format!("[{s}={d}]"),
+            CommandTreeArgument::Required(_, s) => format!("{s}"),
+            CommandTreeArgument::RequiredMany(_, s) => format!("{s}..."),
+            CommandTreeArgument::Optional(_, s) => format!("[{s}]"),
+            CommandTreeArgument::OptionalMany(_, s) => format!("[{s}...]"),
+            CommandTreeArgument::WithDefault(_, s, d) => format!("[{s}={d}]"),
+        }
+    }
+    fn get_name(&self) -> &'a str {
+        match self {
+            CommandTreeArgument::Required(_, name) => name,
+            CommandTreeArgument::RequiredMany(_, name) => name,
+            CommandTreeArgument::Optional(_, name) => name,
+            CommandTreeArgument::OptionalMany(_, name) => name,
+            CommandTreeArgument::WithDefault(_, name, _) => name,
         }
     }
 }
 impl<'a> CommandTreeCompletion<'a> for CommandTreeArgument<'a> {
     fn get_completion(&self, _word: &str) -> Option<Completion> {
+        println!("|{}|", self.get_name());
         None // TODO
     }
 
@@ -677,7 +693,8 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeArgument<'a> {
         None // since we have no children, always None
     }
 
-    fn add_completions(&self, _compls: &mut Vec<Completion>, _word: &str) {
+    fn add_completions_after(&self, _compls: &mut Vec<Completion>, _word: &str) {
+        // since arguments are stored as children of member, instead of linearly
         // TODO
     }
 }
@@ -687,7 +704,7 @@ struct CommandTree<'a>(&'a [CommandTreeMember<'a>]);
 impl<'a> CommandTree<'a> {
     fn help_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for member in self.0 {
-            member.help_fmt(f, 0, 24)?;
+            member.help_fmt(f, 0, 35)?;
             write!(f, "\n")?;
         }
         Ok(())
@@ -702,7 +719,7 @@ impl<'a> CommandTree<'a> {
         None
     }
     #[allow(unused)]
-    fn traverse_to(&self, mut words:  SplitWhitespace<'_>) -> Option<CommandTreeEither<'a>> {
+    fn traverse_to(&self, mut words: SplitWhitespace<'_>) -> Option<CommandTreeEither<'a>> {
         let first = words.next();
         if first.is_none() {
             return None;
@@ -766,7 +783,7 @@ impl<Term: Terminal> linefeed::Completer<Term> for &'_ CommandTree<'_> {
                 if node.is_none() {
                     return None;
                 }
-                node.unwrap().add_completions(&mut compls, word);
+                node.unwrap().add_completions_after(&mut compls, word);
                 return Some(compls);
             }
         }
@@ -779,7 +796,7 @@ static COMMANDS: &CommandTree = &CommandTree(&[
     CommandTreeMember::single(
         "connect",
         "Connect to server with IP on PORT.",
-        &[CommandTreeArgument::Required("IP:PORT")],
+        &[CommandTreeArgument::Required(ArgumentType::IpAddress, "IP:PORT")],
     ),
     CommandTreeMember::group(
         "message",
@@ -789,24 +806,24 @@ static COMMANDS: &CommandTree = &CommandTree(&[
                 "add",
                 "Add a message in CHANNEL with CONTENT. If none, CONTENT can be entered interactively.",
                 &[
-                    CommandTreeArgument::Required("CHANNEL"),
-                    CommandTreeArgument::Optional("CONTENT"),
+                    CommandTreeArgument::Required(ArgumentType::ChannelName, "CHANNEL"),
+                    CommandTreeArgument::Optional(ArgumentType::String, "CONTENT"),
                 ],
                 repl_message_add,
             ),
             CommandTreeMember::binding(
                 "sync",
                 "Sync messages in CHANNEL with server",
-                &[CommandTreeArgument::Required("CHANNEL")],
+                &[CommandTreeArgument::Required(ArgumentType::ChannelName, "CHANNEL")],
                 repl_message_sync,
             ),
             CommandTreeMember::binding(
                 "view",
                 "View COUNT messages in CHANNEL, skipping the last OFFSET messages",
                 &[
-                    CommandTreeArgument::Required("CHANNEL"),
-                    CommandTreeArgument::WithDefault("COUNT", "5"),
-                    CommandTreeArgument::WithDefault("OFFSET", "0"),
+                    CommandTreeArgument::Required(ArgumentType::ChannelName, "CHANNEL"),
+                    CommandTreeArgument::WithDefault(ArgumentType::Int, "COUNT", "5"),
+                    CommandTreeArgument::WithDefault(ArgumentType::Int, "OFFSET", "0"),
                 ],
                 repl_message_view
             ),
@@ -820,8 +837,8 @@ static COMMANDS: &CommandTree = &CommandTree(&[
                 "add",
                 "Add a channel with NAME and DESCRIPTION. If not provided, asks for them interactively (Multi-line DESCRIPTION).",
                 &[
-                    CommandTreeArgument::Optional("NAME"),
-                    CommandTreeArgument::OptionalMany("DESCRIPTION"),
+                    CommandTreeArgument::Optional(ArgumentType::String, "NAME"),
+                    CommandTreeArgument::OptionalMany(ArgumentType::String, "DESCRIPTION"),
                 ],
                 repl_channel_add
             ),

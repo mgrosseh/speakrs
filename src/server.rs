@@ -110,17 +110,35 @@ impl common::rpc::RpcService for HelloServer {
         )
     }
 
+    async fn get_new_messages_since(
+        self,
+        _: Context,
+        _user: UserKey,
+        since: Option<MessageKey>,
+    ) -> ServiceResult<Vec<(MessageKey, MessageData)>> {
+        Ok(if since.is_none() {
+            self.db
+                .messages()?
+                .range(..)
+                .collect::<anyhow::Result<Vec<_>>>()?
+        } else {
+            self.db
+                .messages()?
+                .range(since.unwrap()..)
+                .skip(1)
+                .collect::<anyhow::Result<Vec<_>>>()?
+        })
+    }
     async fn insert_message(
         self,
         _: Context,
         channel: ChannelKey,
         data: MessageData,
-    ) -> ServiceResult {
+    ) -> ServiceResult<MessageKey> {
         self.db
             .messages()?
             .insert_in_context(channel, data)
             .map_err(|e| e.into())
-            .map(|_| ())
     }
     async fn get_message(self, _: Context, key: MessageKey) -> ServiceResult<Option<MessageData>> {
         self.db.messages()?.get(key).map_err(|e| e.into())

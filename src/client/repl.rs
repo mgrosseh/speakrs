@@ -4,12 +4,13 @@ use crate::common::{
     self,
     database::ServerDB,
     rpc::RpcServiceClient,
-    schema::{ChannelData, ChannelKey, ClientData, UserData, UserKey},
+    schema::{ChannelData, ChannelKey, ClientData, MessageData, MessageKey, UserData, UserKey},
 };
 use anyhow::{Context, Result};
 use linefeed::{Completion, Interface, Prompter, ReadResult, Terminal};
 use std::{
-    fmt::{Debug, Display}, sync::{OnceLock, RwLock},
+    fmt::{Debug, Display},
+    sync::{OnceLock, RwLock},
 };
 use std::{
     io::{self},
@@ -163,9 +164,7 @@ impl Connection {
 
 fn current_connection() -> &'static RwLock<ReplConnection> {
     static CONNECTION: OnceLock<RwLock<ReplConnection>> = OnceLock::new();
-    CONNECTION.get_or_init(|| {
-        RwLock::new(ReplConnection::empty())
-    })
+    CONNECTION.get_or_init(|| RwLock::new(ReplConnection::empty()))
 }
 
 const HISTORY_FILE: &str = "repl.history";
@@ -244,10 +243,7 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
 
     Ok(())
 }
-async fn execute_command(
-    commands: &CommandTree<'_>,
-    line: String,
-) -> Result<()> {
+async fn execute_command(commands: &CommandTree<'_>, line: String) -> Result<()> {
     let option = commands.traverse_to_member(&line);
     if option.is_none() {
         println!("Command not found.");
@@ -332,22 +328,140 @@ async fn get_connection(address: impl ToSocketAddrs + Debug) -> Result<ReplConne
     Ok(ReplConnection::create(connection, db, client_data.unwrap()))
 }
 
-fn repl_message_add(_connection: ReplConnection, _args: String) -> JoinHandle<Result<()>> {
-    tokio::spawn(async { Ok(()) })
-}
-fn repl_message_sync(_connection: ReplConnection, _args: String) -> JoinHandle<Result<()>> {
-    tokio::spawn(async {
-        // TODO
-        println!("Syncing messages...");
+fn repl_message_add(connection: ReplConnection, args: String) -> JoinHandle<Result<()>> {
+    let client = connection.client();
+    let db = connection.db();
+    let user = connection.user_key();
+    tokio::spawn(async move {
+        let (arg, rest) = split_first_word(&args);
+        if args.is_empty() {
+            println!("Expected CHANNEL_NAME arg.");
+            return Ok(());
+        }
+        let channel = get_channel_by_name(db.clone(), arg)?;
+        if channel.is_none() {
+            println!("Could not find channel with name {}.", arg);
+            return Ok(());
+        }
+        let (channel_key, channel_data) = channel.unwrap();
+        let content = if !rest.trim().is_empty() {
+            rest.to_string()
+        } else {
+            println!(
+                "Enter message content (multiline). Send EOF or enter an empty line to confirm, ^C to cancel."
+            );
+            let x = multiline_prompt("msg: ", |x| x.is_empty())?;
+            if x.is_none() {
+                println!("Cancelled. Did not send message.");
+                return Ok(());
+            }
+            x.unwrap().join("\n")
+        };
+        let data = MessageData::now(user, content);
+
+        let key = client
+            .clone()
+            .insert_message(tarpc::context::current(), channel_key, data.clone())
+            .instrument(info_span!("Creating message in server"))
+            .await?
+            .context("Error while talking to server")?;
+
+        db.messages()?.set(key, data.clone())?;
         println!(
-            "Got {} new messages. Use `message view` to go though them.",
-            0
+            "Created message at {} with key {} in channel \"{}\"",
+            data.timestamp,
+            key,
+            channel_data.get_name()
         );
         Ok(())
     })
 }
-fn repl_message_view(_connection: ReplConnection, _args: String) -> JoinHandle<Result<()>> {
-    tokio::spawn(async { Ok(()) })
+// TODO: make function on DBTree that gets elements based on filter, to generalize these types of actions
+fn get_channel_by_name(db: ServerDB, name: &str) -> Result<Option<(ChannelKey, ChannelData)>> {
+    match db
+        .channels()?
+        .range(..)
+        .filter(|result| match result {
+            Err(_e) => {
+                false // TODO this error now is ignored
+            }
+            Ok(kv) => kv.1.get_name() == name,
+        })
+        .nth(0)
+    {
+        Some(x) => match x {
+            Err(e) => Err(e),
+            Ok(v) => Ok(Some(v)),
+        },
+        None => Ok(None),
+    }
+}
+fn repl_message_sync(connection: ReplConnection, args: String) -> JoinHandle<Result<()>> {
+    let client = connection.client();
+    let db = connection.db();
+    let user = connection.user_key();
+
+    tokio::spawn(async move {
+        let (arg, rest) = split_first_word(&args);
+        // TODO: these arg checks should be handled by arg system
+        if !arg_guard(rest) {
+            return Ok(());
+        }
+        if arg.is_empty() {
+            println!("Expected argument CHANNEL_NAME.");
+            return Ok(());
+        }
+        let channel = get_channel_by_name(db.clone(), arg)?;
+        if channel.is_none() {
+            println!("Could not find channel with name {}.", arg);
+            return Ok(());
+        }
+        let channel = channel.unwrap();
+        println!("Syncing messages...");
+        let last_known_message = db
+            .messages()?
+            .range(..)
+            .filter(|res| match res {
+                Err(_e) => false, // TODO: ideally there would be some filter on DBTree key-value-pairs
+                Ok(kv) => kv.0.prefix() == channel.0,
+            })
+            .map(|x| x)
+            .last()
+            .map(|res| res.map(|kv| kv.0));
+        let last_known_message = match last_known_message {
+            Some(Err(e)) => return Err(e),
+            Some(Ok(x)) => Some(x),
+            None => None,
+        };
+        let new_messages = client
+            .get_new_messages_since(tarpc::context::current(), user.clone(), last_known_message)
+            .instrument(info_span!("Asking server for message list"))
+            .await?
+            .context("Error while talking to server")?;
+        let len = new_messages.len();
+        for (key, data) in new_messages {
+            db.messages()?.set(key, data)?;
+        }
+        println!(
+            "Got {} new messages. Use `message view CHANNEL` to list them.",
+            len
+        );
+        Ok(())
+    })
+}
+fn repl_message_view(connection: ReplConnection, _args: String) -> JoinHandle<Result<()>> {
+    // TODO: channels
+    let db = connection.db();
+    tokio::spawn(async move {
+        let channels = db
+            .messages()?
+            .range(..)
+            .collect::<anyhow::Result<Vec<(MessageKey, MessageData)>>>()?;
+        for (_, value) in channels {
+            println!("Message `{}`: \"{}\"", value.author, value.content)
+        }
+        Ok(())
+    })
 }
 
 fn repl_channel_sync(connection: ReplConnection, _args: String) -> JoinHandle<Result<()>> {
@@ -461,40 +575,38 @@ enum CommandTreeEither<'a> {
 impl<'a> CommandTreeEither<'a> {
     fn traverse_to(self, text: &str) -> Option<CommandTreeEither<'a>> {
         match self {
-            CommandTreeEither::Member(member) => {
-                match member.children {
-                    CommandTreePart::Members(_) => {
-                        let (word, rest) = split_first_word(text);
-                        if word.is_empty() {
-                            return Some(self);
-                        }
-                        if let Some(next) = self.find_match(word) {
-                            next.traverse_to(rest)
-                        } else {
-                            None
-                        }
-                    },
-                    CommandTreePart::Arguments(children) => {
-                        let (mut word, mut rest) = split_first_word(text);
-                        for i in 0..children.len() {
-                            if word.is_empty() {
-                                return Some(CommandTreeEither::Argument(&children[i]));
-                            }
-
-                            (word, rest) = split_first_word(rest);
-                        }
-
+            CommandTreeEither::Member(member) => match member.children {
+                CommandTreePart::Members(_) => {
+                    let (word, rest) = split_first_word(text);
+                    if word.is_empty() {
+                        return Some(self);
+                    }
+                    if let Some(next) = self.find_match(word) {
+                        next.traverse_to(rest)
+                    } else {
                         None
-                    },
+                    }
+                }
+                CommandTreePart::Arguments(children) => {
+                    let (mut word, mut rest) = split_first_word(text);
+                    for i in 0..children.len() {
+                        if word.is_empty() {
+                            return Some(CommandTreeEither::Argument(&children[i]));
+                        }
+
+                        (word, rest) = split_first_word(rest);
+                    }
+
+                    None
                 }
             },
-            CommandTreeEither::Argument(_) =>  {
+            CommandTreeEither::Argument(_) => {
                 if text.trim().is_empty() {
                     Some(self)
                 } else {
                     None
                 }
-            },
+            }
         }
     }
     fn traverse_to_member(self, text: &str) -> Option<(&'a CommandTreeMember<'a>, String)> {
@@ -695,17 +807,18 @@ impl ArgumentType {
 
     fn add_completions(self, compls: &mut Vec<Completion>, word: &str) {
         match self {
-            ArgumentType::ChannelName => {
-                match fetch_all_channel_names() {
-                    Ok(names) => {
-                        for name in names {
-                            if word.is_empty() || name.starts_with(word) {
-                                compls.push(Completion::simple(name))
-                            }
+            ArgumentType::ChannelName => match fetch_all_channel_names() {
+                Ok(names) => {
+                    for name in names {
+                        if word.is_empty() || name.starts_with(word) {
+                            compls.push(Completion::simple(name))
                         }
-                    },
-                    Err(e) => warn!("Could not do ChannelName completion, error during fetch: {:?}", e),
+                    }
                 }
+                Err(e) => warn!(
+                    "Could not do ChannelName completion, error during fetch: {:?}",
+                    e
+                ),
             },
             ArgumentType::String => (),
             ArgumentType::Int => (),
@@ -719,10 +832,11 @@ fn fetch_all_channel_names() -> Result<Vec<String>> {
         return Ok(vec![]);
     }
     let db = connection.db();
-    Ok(db.channels()?
-       .range(..)
-       .map(|result| result.map(|(_, v)| v.get_name().to_owned()))
-       .collect::<Result<Vec<String>>>()?)
+    Ok(db
+        .channels()?
+        .range(..)
+        .map(|result| result.map(|(_, v)| v.get_name().to_owned()))
+        .collect::<Result<Vec<String>>>()?)
 }
 #[derive(Clone)]
 enum CommandTreeArgument<'a> {

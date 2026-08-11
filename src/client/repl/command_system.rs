@@ -5,22 +5,9 @@ use std::{
 };
 use tokio::task::JoinHandle;
 
-use super::{split_first_word, ReplConnection, current_connection};
+use super::{split_first_word};
 
 // TODO: maybe generalize
-pub(super) fn fetch_all_channel_names() -> Result<Vec<String>> {
-    let connection = current_connection().read().unwrap();
-    if !connection.has() {
-        return Ok(vec![]);
-    }
-    let db = connection.db();
-    Ok(db
-        .channels()?
-        .range(..)
-        .map(|result| result.map(|(_, v)| v.get_name().to_owned()))
-        .collect::<Result<Vec<String>>>()?)
-}
-
 pub(super) trait CommandTreeCompletion<'a, T> where T: Argument + Copy + Clone {
     fn get_completion(&self, word: &str) -> Option<Completion>;
     fn matches(&self, word: &str) -> bool;
@@ -129,7 +116,7 @@ pub(super) struct CommandTreeMember<'a, T> where T: Argument + Copy + Clone {
     pub binding: Option<BindingFn>,
     children: CommandTreePart<'a, T>,
 }
-pub(super) type BindingFn = fn(ReplConnection, String) -> JoinHandle<Result<()>>;
+pub(super) type BindingFn = fn(String) -> JoinHandle<Result<()>>;
 
 impl<'a, T> CommandTreeMember<'a, T> where T: Argument + Copy + Clone {
     /// Create a binding Member.
@@ -451,7 +438,7 @@ mod test {
         CommandTreeMember::binding("test-binding", "Testing binding", &[], a_test_binding),
     ]);
 
-    fn a_test_binding(_connection: ReplConnection, args: String) -> JoinHandle<Result<()>> {
+    fn a_test_binding(args: String) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
             let (word, _) = split_first_word(&args);
             println!("{}", word);
@@ -461,9 +448,8 @@ mod test {
     #[tokio::test]
     async fn test_binding() {
         let binding = TEST_COMMANDS.0[0].binding.unwrap();
-        let connection = ReplConnection::empty();
         let args = "het the tri".to_owned();
-        binding(connection, args).await.unwrap().unwrap();
+        binding(args).await.unwrap().unwrap();
     }
 
     #[test]

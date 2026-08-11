@@ -15,10 +15,21 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
-use crate::common::{self};
 use anyhow::Result;
 use clap::Parser;
-use std::{fmt::Debug, path::PathBuf};
+use crate::common::{
+    self,
+    database::ServerDB,
+    rpc::RpcServiceClient,
+    schema::{ClientData, UserKey},
+};
+use std::{
+    fmt::{Debug},
+    path::PathBuf,
+    sync::{OnceLock, RwLock},
+};
+use tarpc::tokio_serde::formats::Json;
+use tokio::{net::ToSocketAddrs};
 
 pub mod repl;
 
@@ -39,6 +50,73 @@ pub(crate) async fn run(args: ClientArguments) -> Result<()> {
 }
 fn gui(_args: ClientArguments) {
     speakrs_gui::run();
+}
+
+
+// ==============================
+// => Connection
+// ==============================
+// TODO: in the future having only one connection is bad, so current_connection() and clone_current_connection() will probably need overhauls
+#[derive(Debug, Clone)]
+pub enum Connection {
+    Empty,
+    Active(ActiveConnection),
+}
+#[derive(Debug, Clone)]
+pub struct ActiveConnection {
+    service_client: RpcServiceClient,
+    db: ServerDB,
+    client_data: ClientData,
+}
+impl Connection {
+    async fn create_service_client(addr: impl ToSocketAddrs) -> Result<RpcServiceClient> {
+        let mut transport = tarpc::serde_transport::tcp::connect(addr, Json::default);
+        transport.config_mut().max_frame_length(usize::MAX);
+        Ok(RpcServiceClient::new(tarpc::client::Config::default(), transport.await?).spawn())
+    }
+    fn new(service_client: RpcServiceClient, db: ServerDB, client_data: ClientData) -> Self {
+        Self::Active(ActiveConnection { service_client, db, client_data })
+    }
+    fn has(&self) -> bool {
+        match self {
+            Self::Empty => false,
+            Self::Active(_) => true,
+        }
+    }
+    fn unwrap(self) -> (RpcServiceClient, ServerDB, ClientData) {
+        match self {
+            Self::Empty => panic!("ReplConnection: calling unwrap() on Empty, always call has() first."),
+            Self::Active(c) => (c.service_client, c.db, c.client_data),
+        }
+    }
+    #[allow(unused)]
+    fn client(&self) -> &RpcServiceClient {
+        match self {
+            Self::Empty => panic!("ReplConnection: calling client() on Empty, always call has() first."),
+            Self::Active(connection) => &connection.service_client,
+        }
+    }
+    fn db(&self) -> &ServerDB {
+        match self {
+            Self::Empty => panic!("ReplConnection: calling db() on Empty, always call has() first."),
+            Self::Active(connection) => &connection.db,
+        }
+    }
+    #[allow(unused)]
+    fn user_key(&self) -> UserKey {
+        match self {
+            Self::Empty => panic!("ReplConnection: calling user_key() on Empty, always call has() first."),
+            Self::Active(connection) => connection.client_data.user_key,
+        }
+    }
+}
+
+pub fn current_connection() -> &'static RwLock<Connection> {
+    static CONNECTION: OnceLock<RwLock<Connection>> = OnceLock::new();
+    CONNECTION.get_or_init(|| RwLock::new(Connection::Empty))
+}
+pub fn clone_current_connection() -> Connection {
+    current_connection().read().unwrap().clone()
 }
 
 // ==============================

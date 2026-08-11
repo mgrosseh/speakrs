@@ -1,23 +1,18 @@
-use super::ClientArguments;
+use super::{ClientArguments, Connection, clone_current_connection, current_connection};
 
 use crate::common::{
     self,
     database::ServerDB,
-    rpc::RpcServiceClient,
-    schema::{ChannelData, ChannelKey, ClientData, MessageData, MessageKey, UserData, UserKey},
+    schema::{ChannelData, ChannelKey, ClientData, MessageData, MessageKey, UserData},
 };
 use anyhow::{Context, Result};
 use linefeed::{Completion, Interface, ReadResult};
-use std::{
-    fmt::{Debug},
-    sync::{OnceLock, RwLock},
-};
+use std::fmt::Debug;
 use std::{
     io::{self},
     sync::Arc,
 };
-use tarpc::tokio_serde::formats::Json;
-use tokio::{net::ToSocketAddrs, task::JoinHandle};
+use tokio::{task::JoinHandle};
 use tracing::{Instrument, error, info, info_span, warn};
 
 use command_system::*;
@@ -58,19 +53,6 @@ fn split_opt_words(count: usize, text: &str) -> (Vec<&str>, &str) {
         }
     }
     (vec, rest)
-}
-
-/// Handle Result error case by printing the error and using "continue". Returns unwrapped result value.
-macro_rules! try_continue {
-    ($expr:expr $(,)?) => {
-        match $expr {
-            Ok(value) => value,
-            Err(e) => {
-                print_error(e);
-                continue;
-            }
-        }
-    };
 }
 
 fn quick_prompt(prompt: &str) -> Result<ReadResult> {
@@ -115,61 +97,18 @@ fn arg_guard(args: &str) -> bool {
     true
 }
 
-#[derive(Debug, Clone)]
-struct ReplConnection {
-    connection: Option<Connection>,
-    db: Option<ServerDB>,
-    client_data: Option<ClientData>,
-}
-impl ReplConnection {
-    fn empty() -> Self {
-        Self {
-            connection: None,
-            db: None,
-            client_data: None,
-        }
+// TODO: move proper place
+pub fn fetch_all_channel_names() -> Result<Vec<String>> {
+    let connection = current_connection().read().unwrap();
+    if !connection.has() {
+        return Ok(vec![]);
     }
-    fn create(connection: Connection, db: ServerDB, client_data: ClientData) -> Self {
-        Self {
-            connection: Some(connection),
-            db: Some(db),
-            client_data: Some(client_data),
-        }
-    }
-    fn has(&self) -> bool {
-        self.connection.is_some()
-    }
-    fn client(&self) -> RpcServiceClient {
-        self.connection.as_ref().map(|c| c.get_client()).unwrap()
-    }
-    fn db(&self) -> ServerDB {
-        self.db.clone().unwrap()
-    }
-    fn user_key(&self) -> UserKey {
-        self.client_data.as_ref().map(|d| d.user_key).unwrap()
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Connection {
-    client: RpcServiceClient,
-}
-impl Connection {
-    async fn create(addr: impl ToSocketAddrs) -> Result<Self> {
-        let mut transport = tarpc::serde_transport::tcp::connect(addr, Json::default);
-        transport.config_mut().max_frame_length(usize::MAX);
-        let client =
-            RpcServiceClient::new(tarpc::client::Config::default(), transport.await?).spawn();
-        Ok(Connection { client })
-    }
-    fn get_client(&self) -> RpcServiceClient {
-        self.client.clone()
-    }
-}
-
-fn current_connection() -> &'static RwLock<ReplConnection> {
-    static CONNECTION: OnceLock<RwLock<ReplConnection>> = OnceLock::new();
-    CONNECTION.get_or_init(|| RwLock::new(ReplConnection::empty()))
+    let db = connection.db();
+    Ok(db
+        .channels()?
+        .range(..)
+        .map(|result| result.map(|(_, v)| v.get_name().to_owned()))
+        .collect::<Result<Vec<String>>>()?)
 }
 
 const HISTORY_FILE: &str = "repl.history";
@@ -201,30 +140,13 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
         if !line.trim().is_empty() {
             interface.add_history_unique(line.clone());
         }
-        let (cmd, args) = split_first_word(&line);
+        let (cmd, _) = split_first_word(&line);
         match cmd {
             "help" => {
                 println!("{}", COMMANDS);
                 continue;
             }
             "quit" => break,
-            "connect" => {
-                let (address, rest) = split_first_word(args);
-                if !arg_guard(rest) {
-                    continue;
-                }
-                let connection = try_continue!(
-                    get_connection(address)
-                        .await
-                        .context("Error during connect command")
-                );
-                if connection.has() {
-                    *current_connection().write().unwrap() = connection;
-                    println!(
-                        "Connected to server. You might want to run sync to load new content."
-                    );
-                }
-            }
             _ => {
                 if !current_connection().read().unwrap().has() {
                     println!(
@@ -249,69 +171,78 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
     Ok(())
 }
 
-async fn get_connection(address: impl ToSocketAddrs + Debug) -> Result<ReplConnection> {
-    let connection = Connection::create(address).await?;
-    let data = connection
-        .get_client()
-        .get_server_data(tarpc::context::current())
-        .instrument(info_span!("Asking server for server data"))
-        .await
-        .context("RpcError during connection attempt")?
-        .context("Error while talking to server")?;
-    println!("Found server `{}`", data.name);
-
-    let db = ServerDB::magic_open_client(data.name, data.uuid)?;
-    let mut client_data = db
-        .get_client_data()
-        .context("Error while reading local database")?;
-    if client_data.is_none() {
-        println!("Server has not been registered with, would you like to create a user? [y/n]");
-        match quick_prompt("[y/n]? ")? {
-            ReadResult::Input(x) if !(x.starts_with("y") || x.starts_with("Y")) => {
-                println!("Aborted.");
-                return Ok(ReplConnection::empty());
-            }
-            ReadResult::Input(_) => (),
-            _ => return Ok(ReplConnection::empty()),
+fn connect(args: String) -> JoinHandle<Result<()>> {
+    tokio::spawn(async move {
+        let (arg, rest) = split_first_word(&args);
+        if !arg_guard(rest) {
+            return Ok(());
         }
-        let mut username = String::new();
-        while username.is_empty() {
-            match quick_prompt("Username: ")? {
-                ReadResult::Input(x) if common::is_valid_username(&x) => {
-                    username = x;
-                    break;
-                }
-                ReadResult::Input(x) => {
-                    println!("`{}` is not a valid username, try again.", x);
-                    println!(
-                        "Usernames must follow these rules: {}",
-                        common::USERNAME_RULES
-                    );
-                }
-                _ => return Ok(ReplConnection::empty()),
-            }
-        }
-        let user_data = UserData::new(username.clone());
-
-        let user_key = connection
-            .get_client()
-            .create_user(tarpc::context::current(), user_data.clone())
-            .instrument(info_span!("Asking server for new user"))
+        // TODO: bound and arg check
+        let connection = Connection::create_service_client(arg).await?;
+        let data = connection
+            .get_server_data(tarpc::context::current())
+            .instrument(info_span!("Asking server for server data"))
             .await
             .context("RpcError during connection attempt")?
             .context("Error while talking to server")?;
+        println!("Found server `{}`", data.name);
 
-        let data = ClientData {
-            user_key: user_key.clone(),
-        };
-        client_data = Some(data.clone());
-        db.set_client_data(data)
-            .context("Error while writing to local database")?;
+        let db = ServerDB::magic_open_client(data.name, data.uuid)?;
+        let mut client_data = db
+            .get_client_data()
+            .context("Error while reading local database")?;
+        if client_data.is_none() {
+            println!("Server has not been registered with, would you like to create a user? [y/n]");
+            match quick_prompt("[y/n]? ")? {
+                ReadResult::Input(x) if !(x.starts_with("y") || x.starts_with("Y")) => {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+                ReadResult::Input(_) => (),
+                _ => return Ok(()),
+            }
+            let mut username = String::new();
+            while username.is_empty() {
+                match quick_prompt("Username: ")? {
+                    ReadResult::Input(x) if common::is_valid_username(&x) => {
+                        username = x;
+                        break;
+                    }
+                    ReadResult::Input(x) => {
+                        println!("`{}` is not a valid username, try again.", x);
+                        println!(
+                            "Usernames must follow these rules: {}",
+                            common::USERNAME_RULES
+                        );
+                    }
+                    _ => return Ok(()),
+                }
+            }
+            let user_data = UserData::new(username.clone());
 
-        db.users()?.insert((user_key, user_data))?;
-        println!("Created user {} with uuid {}.", username, user_key);
-    }
-    Ok(ReplConnection::create(connection, db, client_data.unwrap()))
+            let user_key = connection
+                .create_user(tarpc::context::current(), user_data.clone())
+                .instrument(info_span!("Asking server for new user"))
+                .await
+                .context("RpcError during connection attempt")?
+                .context("Error while talking to server")?;
+
+            let data = ClientData {
+                user_key: user_key.clone(),
+            };
+            client_data = Some(data.clone());
+            db.set_client_data(data)
+                .context("Error while writing to local database")?;
+
+            db.users()?.insert((user_key, user_data))?;
+            println!("Created user {} with uuid {}.", username, user_key);
+        }
+
+        *current_connection().write().unwrap() =
+            Connection::new(connection, db, client_data.unwrap());
+        println!("Connected to server. You might want to run sync to load new content.");
+        Ok(())
+    })
 }
 
 async fn execute_command(commands: &CommandTree<'_, ArgumentType>, line: String) -> Result<()> {
@@ -325,7 +256,7 @@ async fn execute_command(commands: &CommandTree<'_, ArgumentType>, line: String)
         println!("Command has no associated binding, please report this bug.");
         return Ok(());
     }
-    if let Err(e) = member.binding.unwrap()(current_connection().read().unwrap().clone(), args)
+    if let Err(e) = member.binding.unwrap()(args)
         .await
         .context(format!("While executing command: {}", line))
     {
@@ -374,13 +305,14 @@ impl Argument for ArgumentType {
 static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
     CommandTreeMember::simple("help", "Open this help.", &[]),
     CommandTreeMember::simple("quit", "Quit the repl.", &[]),
-    CommandTreeMember::simple(
+    CommandTreeMember::binding(
         "connect",
         "Connect to server with IP on PORT.",
         &[CommandTreeArgument::Required(
             ArgumentType::SocketAddress,
             "IP:PORT",
         )],
+        connect,
     ),
     CommandTreeMember::group(
         "message",
@@ -440,10 +372,9 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
     ),
 ]);
 
-fn repl_message_add(connection: ReplConnection, args: String) -> JoinHandle<Result<()>> {
-    let client = connection.client();
-    let db = connection.db();
-    let user = connection.user_key();
+fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
+    let (client, db, client_data) = clone_current_connection().unwrap();
+    let user = client_data.user_key;
     tokio::spawn(async move {
         let (arg, rest) = split_first_word(&args);
         if args.is_empty() {
@@ -508,11 +439,10 @@ fn get_channel_by_name(db: ServerDB, name: &str) -> Result<Option<(ChannelKey, C
         None => Ok(None),
     }
 }
-fn repl_message_sync(connection: ReplConnection, args: String) -> JoinHandle<Result<()>> {
+fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
     // TODO: long-term syncing ALL messages, will be a bad idea, the system ideally will have some notion of pages
-    let client = connection.client();
-    let db = connection.db();
-    let user = connection.user_key();
+    let (client, db, client_data) = clone_current_connection().unwrap();
+    let user = client_data.user_key;
 
     tokio::spawn(async move {
         let (arg, rest) = split_first_word(&args);
@@ -562,9 +492,9 @@ fn repl_message_sync(connection: ReplConnection, args: String) -> JoinHandle<Res
         Ok(())
     })
 }
-fn repl_message_view(connection: ReplConnection, _args: String) -> JoinHandle<Result<()>> {
+fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {
     // TODO: channels
-    let db = connection.db();
+    let (_, db, __data) = clone_current_connection().unwrap();
     tokio::spawn(async move {
         let channels = db
             .messages()?
@@ -577,10 +507,9 @@ fn repl_message_view(connection: ReplConnection, _args: String) -> JoinHandle<Re
     })
 }
 
-fn repl_channel_sync(connection: ReplConnection, _args: String) -> JoinHandle<Result<()>> {
-    let client = connection.client();
-    let db = connection.db();
-    let user = connection.user_key();
+fn repl_channel_sync(_args: String) -> JoinHandle<Result<()>> {
+    let (client, db, client_data) = clone_current_connection().unwrap();
+    let user = client_data.user_key;
     tokio::spawn(async move {
         println!("Syncing channels...");
         let last_known_channel = db.channels()?.last()?.map(|kv| kv.0);
@@ -598,10 +527,9 @@ fn repl_channel_sync(connection: ReplConnection, _args: String) -> JoinHandle<Re
         Ok(())
     })
 }
-fn repl_channel_add(connection: ReplConnection, args: String) -> JoinHandle<Result<()>> {
-    let client = connection.client();
-    let db = connection.db();
-    let user = connection.user_key();
+fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
+    let (client, db, client_data) = clone_current_connection().unwrap();
+    let user = client_data.user_key;
     tokio::spawn(async move {
         let (args, rest) = split_opt_words(1, &args);
         let name = if args.len() == 1 {
@@ -651,8 +579,8 @@ fn repl_channel_add(connection: ReplConnection, args: String) -> JoinHandle<Resu
     })
 }
 
-fn repl_channel_list(connection: ReplConnection, _args: String) -> JoinHandle<Result<()>> {
-    let db = connection.db();
+fn repl_channel_list(_args: String) -> JoinHandle<Result<()>> {
+    let (_, db, _) = clone_current_connection().unwrap();
     tokio::spawn(async move {
         let channels = db
             .channels()?

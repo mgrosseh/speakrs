@@ -4,12 +4,11 @@ use std::{
     fmt::Display,
 };
 use tokio::task::JoinHandle;
-use tracing::warn;
 
 use super::{split_first_word, ReplConnection, current_connection};
 
 // TODO: maybe generalize
-fn fetch_all_channel_names() -> Result<Vec<String>> {
+pub(super) fn fetch_all_channel_names() -> Result<Vec<String>> {
     let connection = current_connection().read().unwrap();
     if !connection.has() {
         return Ok(vec![]);
@@ -22,24 +21,24 @@ fn fetch_all_channel_names() -> Result<Vec<String>> {
         .collect::<Result<Vec<String>>>()?)
 }
 
-pub(super) trait CommandTreeCompletion<'a> {
+pub(super) trait CommandTreeCompletion<'a, T> where T: Argument + Copy + Clone {
     fn get_completion(&self, word: &str) -> Option<Completion>;
     fn matches(&self, word: &str) -> bool;
-    fn find_match(&self, word: &str) -> Option<CommandTreeEither<'a>>;
+    fn find_match(&self, word: &str) -> Option<CommandTreeEither<'a, T>>;
     fn add_completions_after(&self, compls: &mut Vec<Completion>, word: &str);
 }
 #[derive(Clone)]
-pub(super) enum CommandTreePart<'a> {
-    Members(&'a [CommandTreeMember<'a>]),
-    Arguments(&'a [CommandTreeArgument<'a>]),
+pub(super) enum CommandTreePart<'a, T> where T: Argument + Copy + Clone {
+    Members(&'a [CommandTreeMember<'a, T>]),
+    Arguments(&'a [CommandTreeArgument<'a, T>]),
 }
 #[derive(Clone)]
-pub(super) enum CommandTreeEither<'a> {
-    Member(&'a CommandTreeMember<'a>),
-    Argument(&'a CommandTreeArgument<'a>),
+pub(super) enum CommandTreeEither<'a, T> where T: Argument + Copy + Clone {
+    Member(&'a CommandTreeMember<'a, T>),
+    Argument(&'a CommandTreeArgument<'a, T>),
 }
-impl<'a> CommandTreeEither<'a> {
-    fn traverse_to(self, text: &str) -> Option<CommandTreeEither<'a>> {
+impl<'a, T> CommandTreeEither<'a, T> where T: Argument + Copy + Clone {
+    fn traverse_to(self, text: &str) -> Option<CommandTreeEither<'a, T>> {
         match self {
             CommandTreeEither::Member(member) => match member.children {
                 CommandTreePart::Members(_) => {
@@ -75,7 +74,7 @@ impl<'a> CommandTreeEither<'a> {
             }
         }
     }
-    fn traverse_to_member(self, text: &str) -> Option<(&'a CommandTreeMember<'a>, String)> {
+    fn traverse_to_member(self, text: &str) -> Option<(&'a CommandTreeMember<'a, T>, String)> {
         match self {
             CommandTreeEither::Argument(_) => return None,
             CommandTreeEither::Member(member) => {
@@ -93,7 +92,7 @@ impl<'a> CommandTreeEither<'a> {
         }
     }
 }
-impl<'a> CommandTreeCompletion<'a> for CommandTreeEither<'a> {
+impl<'a, T> CommandTreeCompletion<'a, T> for CommandTreeEither<'a, T> where T: Argument + Copy + Clone {
     fn get_completion(&self, word: &str) -> Option<Completion> {
         match self {
             CommandTreeEither::Member(member) => member.get_completion(word),
@@ -108,7 +107,7 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeEither<'a> {
         }
     }
 
-    fn find_match(&self, word: &str) -> Option<CommandTreeEither<'a>> {
+    fn find_match(&self, word: &str) -> Option<CommandTreeEither<'a, T>> {
         match self {
             CommandTreeEither::Member(member) => member.find_match(word),
             CommandTreeEither::Argument(argument) => argument.find_match(word),
@@ -124,19 +123,21 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeEither<'a> {
     }
 }
 #[derive(Clone)]
-pub(super) struct CommandTreeMember<'a> {
+pub(super) struct CommandTreeMember<'a, T> where T: Argument + Copy + Clone {
     name: &'a str,
     desc: &'a str,
     pub binding: Option<BindingFn>,
-    children: CommandTreePart<'a>,
+    children: CommandTreePart<'a, T>,
 }
 pub(super) type BindingFn = fn(ReplConnection, String) -> JoinHandle<Result<()>>;
 
-impl<'a> CommandTreeMember<'a> {
+impl<'a, T> CommandTreeMember<'a, T> where T: Argument + Copy + Clone {
+    /// Create a binding Member.
+    /// A binding is a simple Member with an associated binding that can be executed.
     pub const fn binding(
         name: &'a str,
         desc: &'a str,
-        args: &'a [CommandTreeArgument<'a>],
+        args: &'a [CommandTreeArgument<'a, T>],
         binding: BindingFn,
     ) -> Self {
         let children = CommandTreePart::Arguments(args);
@@ -147,7 +148,9 @@ impl<'a> CommandTreeMember<'a> {
             children,
         }
     }
-    pub const fn single(name: &'a str, desc: &'a str, args: &'a [CommandTreeArgument<'a>]) -> Self {
+    /// Create a simple Member.
+    /// Simple members have no function other than to designate a command exists, it cannot be executed.
+    pub const fn simple(name: &'a str, desc: &'a str, args: &'a [CommandTreeArgument<'a, T>]) -> Self {
         let children = CommandTreePart::Arguments(args);
         CommandTreeMember {
             desc,
@@ -156,7 +159,9 @@ impl<'a> CommandTreeMember<'a> {
             children,
         }
     }
-    pub const fn group(name: &'a str, desc: &'a str, children: &'a [CommandTreeMember<'a>]) -> Self {
+    /// Create a group Member.
+    /// A group contains children which can be other members, either simple, bindings or other groups.
+    pub const fn group(name: &'a str, desc: &'a str, children: &'a [CommandTreeMember<'a, T>]) -> Self {
         let children = CommandTreePart::Members(children);
         CommandTreeMember {
             desc,
@@ -166,6 +171,7 @@ impl<'a> CommandTreeMember<'a> {
         }
     }
 
+    /// Whether this CommandTreeMember is a group of members (as opposed to a simple/binding member).
     pub fn is_group(&self) -> bool {
         match self.children {
             CommandTreePart::Members(_) => true,
@@ -209,7 +215,7 @@ impl<'a> CommandTreeMember<'a> {
         Ok(())
     }
 }
-impl<'a> CommandTreeCompletion<'a> for CommandTreeMember<'a> {
+impl<'a, T> CommandTreeCompletion<'a, T> for CommandTreeMember<'a, T> where T: Argument + Copy + Clone {
     fn get_completion(&self, word: &str) -> Option<Completion> {
         if self.name.starts_with(word) {
             Some(Completion::simple(self.name.to_string()))
@@ -221,7 +227,7 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeMember<'a> {
         self.name == word
     }
 
-    fn find_match(&self, word: &str) -> Option<CommandTreeEither<'a>> {
+    fn find_match(&self, word: &str) -> Option<CommandTreeEither<'a, T>> {
         match self.children {
             CommandTreePart::Arguments(args) => {
                 for arg in args {
@@ -259,49 +265,25 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeMember<'a> {
         }
     }
 }
-#[derive(Clone, Copy)]
-pub(super) enum ArgumentType {
-    ChannelName,
-    String,
-    Int,
-    IpAddress,
-}
-impl ArgumentType {
-    fn matches(self, _word: &str) -> bool {
-        true // TODO: could depending on type include a quick test of sorts to categorize this argument roughly, full test might be too expensive
-    }
-
-    fn add_completions(self, compls: &mut Vec<Completion>, word: &str) {
-        match self {
-            ArgumentType::ChannelName => match fetch_all_channel_names() {
-                Ok(names) => {
-                    for name in names {
-                        if word.is_empty() || name.starts_with(word) {
-                            compls.push(Completion::simple(name))
-                        }
-                    }
-                }
-                Err(e) => warn!(
-                    "Could not do ChannelName completion, error during fetch: {:?}",
-                    e
-                ),
-            },
-            ArgumentType::String => (),
-            ArgumentType::Int => (),
-            ArgumentType::IpAddress => (), // TODO: maybe expand LOCALHOST or other neat shortcuts into ip_addresses
-        }
-    }
+pub trait Argument {
+    /// Should efficiently determine if word could match, keeping computation to a minimum to reduce lag.
+    /// See [`Argument::matches_full`] for proper matching of this Argument, prioritizing correctness over speed.
+    fn matches_simple(self, word: &str) -> bool;
+    /// Determine if [`word`] is matches (could parse into) this argument.
+    fn matches_full(self, word: &str) -> bool;
+    /// Add all completions based on [`word`] into [`compls`].
+    fn add_completions(self, compls: &mut Vec<Completion>, word: &str);
 }
 #[derive(Clone)]
-pub(super) enum CommandTreeArgument<'a> {
-    Required(ArgumentType, &'a str),
+pub(super) enum CommandTreeArgument<'a, T> where T: Argument + Copy + Clone {
+    Required(T, &'a str),
     #[allow(unused)]
-    RequiredMany(ArgumentType, &'a str),
-    Optional(ArgumentType, &'a str),
-    OptionalMany(ArgumentType, &'a str),
-    WithDefault(ArgumentType, &'a str, &'a str),
+    RequiredMany(T, &'a str),
+    Optional(T, &'a str),
+    OptionalMany(T, &'a str),
+    WithDefault(T, &'a str, &'a str),
 }
-impl<'a> CommandTreeArgument<'a> {
+impl<'a, T> CommandTreeArgument<'a, T> where T: Argument + Copy + Clone {
     fn help(&self) -> String {
         match self {
             CommandTreeArgument::Required(_, s) => format!("{s}"),
@@ -320,7 +302,7 @@ impl<'a> CommandTreeArgument<'a> {
             CommandTreeArgument::WithDefault(_, name, _) => name,
         }
     }
-    fn get_argument_type(&self) -> ArgumentType {
+    fn get_argument_type(&self) -> T {
         match self {
             CommandTreeArgument::Required(arg_type, _) => *arg_type,
             CommandTreeArgument::RequiredMany(arg_type, _) => *arg_type,
@@ -330,17 +312,17 @@ impl<'a> CommandTreeArgument<'a> {
         }
     }
 }
-impl<'a> CommandTreeCompletion<'a> for CommandTreeArgument<'a> {
+impl<'a, T> CommandTreeCompletion<'a, T> for CommandTreeArgument<'a, T> where T: Argument + Copy + Clone {
     fn get_completion(&self, _word: &str) -> Option<Completion> {
         println!("|{}|", self.get_name());
         None // TODO
     }
 
     fn matches(&self, word: &str) -> bool {
-        self.get_argument_type().matches(word)
+        self.get_argument_type().matches_simple(word) // TODO: decide if simple is sufficient here
     }
 
-    fn find_match(&self, _word: &str) -> Option<CommandTreeEither<'a>> {
+    fn find_match(&self, _word: &str) -> Option<CommandTreeEither<'a, T>> {
         None // since we have no children, always None
     }
 
@@ -351,8 +333,8 @@ impl<'a> CommandTreeCompletion<'a> for CommandTreeArgument<'a> {
 }
 
 #[derive(Clone)]
-pub(super) struct CommandTree<'a>(pub &'a [CommandTreeMember<'a>]);
-impl<'a> CommandTree<'a> {
+pub(super) struct CommandTree<'a, T>(pub &'a [CommandTreeMember<'a, T>]) where T: Argument + Copy + Clone;
+impl<'a, T> CommandTree<'a, T> where T: Argument + Copy + Clone {
     fn help_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for member in self.0 {
             member.help_fmt(f, 0, 35)?;
@@ -361,7 +343,7 @@ impl<'a> CommandTree<'a> {
         Ok(())
     }
 
-    fn find_match(&self, word: &str) -> Option<CommandTreeEither<'a>> {
+    fn find_match(&self, word: &str) -> Option<CommandTreeEither<'a, T>> {
         for child in self.0 {
             if child.matches(word) {
                 return Some(CommandTreeEither::Member(child));
@@ -369,14 +351,18 @@ impl<'a> CommandTree<'a> {
         }
         None
     }
-    fn traverse_to(&self, first: &str, rest: &str) -> Option<CommandTreeEither<'a>> {
+    fn traverse_to(&self, first: &str, rest: &str) -> Option<CommandTreeEither<'a, T>> {
         let node = self.find_match(first);
         if node.is_none() {
             return None;
         }
         node.unwrap().traverse_to(rest)
     }
-    pub fn traverse_to_member(&self, text: &str) -> Option<(&'a CommandTreeMember<'a>, String)> {
+
+    /// Find the member corresponding to [`text`], effectively parsing it.
+    /// Returns the member along with remaining text after parsing, which could include arguments for the command designated by this member.
+    /// If no member matches [`text`], returns None.
+    pub fn traverse_to_member(&self, text: &str) -> Option<(&'a CommandTreeMember<'a, T>, String)> {
         if text.trim().is_empty() {
             return None;
         }
@@ -390,13 +376,13 @@ impl<'a> CommandTree<'a> {
         }
     }
 }
-impl Display for CommandTree<'_> {
+impl<T> Display for CommandTree<'_, T> where T: Argument + Copy + Clone {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.help_fmt(f)
     }
 }
 
-impl<Term: Terminal> linefeed::Completer<Term> for &'_ CommandTree<'_> {
+impl<Term: Terminal, T> linefeed::Completer<Term> for &'_ CommandTree<'_, T> where T: Argument + Copy + Clone + Sync {
     fn complete(
         &self,
         word: &str,
@@ -433,6 +419,38 @@ impl<Term: Terminal> linefeed::Completer<Term> for &'_ CommandTree<'_> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[derive(Clone, Copy)]
+    enum TestTypes {
+        String,
+        Other,
+    }
+    impl Argument for TestTypes {
+        fn matches_simple(self, _word: &str) -> bool {
+            true
+        }
+
+        fn matches_full(self, _word: &str) -> bool {
+            true
+        }
+
+        fn add_completions(self, _compls: &mut Vec<Completion>, _word: &str) {
+
+        }
+    }
+    static TEST_COMMANDS: &CommandTree<'static, TestTypes> = &CommandTree(&[
+        CommandTreeMember::simple("help", "Testing tests", &[]),
+        CommandTreeMember::group(
+            "test_group",
+            "Testing tests",
+            &[
+                CommandTreeMember::simple("test", "Testing tests", &[]),
+                CommandTreeMember::simple("group", "Testing tests", &[]),
+            ],
+        ),
+        CommandTreeMember::binding("test-binding", "Testing binding", &[], a_test_binding),
+    ]);
+
     fn a_test_binding(_connection: ReplConnection, args: String) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
             let (word, _) = split_first_word(&args);
@@ -442,29 +460,12 @@ mod test {
     }
     #[tokio::test]
     async fn test_binding() {
-        let x = &CommandTree(&[CommandTreeMember::binding(
-            "test",
-            "Open this help.",
-            &[],
-            a_test_binding,
-        )]);
-        let binding = x.0[0].binding.unwrap();
+        let binding = TEST_COMMANDS.0[0].binding.unwrap();
         let connection = ReplConnection::empty();
         let args = "het the tri".to_owned();
         binding(connection, args).await.unwrap().unwrap();
     }
 
-    static TEST_COMMANDS: &CommandTree<'static> = &CommandTree(&[
-        CommandTreeMember::single("help", "Testing tests", &[]),
-        CommandTreeMember::group(
-            "test_group",
-            "Testing tests",
-            &[
-                CommandTreeMember::single("test", "Testing tests", &[]),
-                CommandTreeMember::single("group", "Testing tests", &[]),
-            ],
-        ),
-    ]);
     #[test]
     fn test_traverse() {
         let text = "test_group test some args ignored";

@@ -7,7 +7,7 @@ use crate::common::{
     schema::{ChannelData, ChannelKey, ClientData, MessageData, MessageKey, UserData, UserKey},
 };
 use anyhow::{Context, Result};
-use linefeed::{Interface, ReadResult};
+use linefeed::{Completion, Interface, ReadResult};
 use std::{
     fmt::{Debug},
     sync::{OnceLock, RwLock},
@@ -18,7 +18,7 @@ use std::{
 };
 use tarpc::tokio_serde::formats::Json;
 use tokio::{net::ToSocketAddrs, task::JoinHandle};
-use tracing::{Instrument, error, info, info_span};
+use tracing::{Instrument, error, info, info_span, warn};
 
 use command_system::*;
 
@@ -314,7 +314,7 @@ async fn get_connection(address: impl ToSocketAddrs + Debug) -> Result<ReplConne
     Ok(ReplConnection::create(connection, db, client_data.unwrap()))
 }
 
-async fn execute_command(commands: &CommandTree<'_>, line: String) -> Result<()> {
+async fn execute_command(commands: &CommandTree<'_, ArgumentType>, line: String) -> Result<()> {
     let option = commands.traverse_to_member(&line);
     if option.is_none() {
         println!("Command not found.");
@@ -334,14 +334,51 @@ async fn execute_command(commands: &CommandTree<'_>, line: String) -> Result<()>
     Ok(())
 }
 
-static COMMANDS: &CommandTree = &CommandTree(&[
-    CommandTreeMember::single("help", "Open this help.", &[]),
-    CommandTreeMember::single("quit", "Quit the repl.", &[]),
-    CommandTreeMember::single(
+#[derive(Clone, Copy)]
+pub(super) enum ArgumentType {
+    ChannelName,
+    String,
+    Int,
+    SocketAddress,
+}
+impl Argument for ArgumentType {
+    fn matches_simple(self, _word: &str) -> bool {
+        true // TODO: could depending on type include a quick test of sorts to categorize this argument roughly, full test might be too expensive
+    }
+    fn matches_full(self, _word: &str) -> bool {
+        true // TODO
+    }
+
+    fn add_completions(self, compls: &mut Vec<Completion>, word: &str) {
+        match self {
+            ArgumentType::ChannelName => match fetch_all_channel_names() {
+                Ok(names) => {
+                    for name in names {
+                        if word.is_empty() || name.starts_with(word) {
+                            compls.push(Completion::simple(name))
+                        }
+                    }
+                }
+                Err(e) => warn!(
+                    "Could not do ChannelName completion, error during fetch: {:?}",
+                    e
+                ),
+            },
+            ArgumentType::String => (),
+            ArgumentType::Int => (),
+            ArgumentType::SocketAddress => (), // TODO: maybe expand LOCALHOST or other neat shortcuts into ip_addresses
+        }
+    }
+}
+
+static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
+    CommandTreeMember::simple("help", "Open this help.", &[]),
+    CommandTreeMember::simple("quit", "Quit the repl.", &[]),
+    CommandTreeMember::simple(
         "connect",
         "Connect to server with IP on PORT.",
         &[CommandTreeArgument::Required(
-            ArgumentType::IpAddress,
+            ArgumentType::SocketAddress,
             "IP:PORT",
         )],
     ),
@@ -472,6 +509,7 @@ fn get_channel_by_name(db: ServerDB, name: &str) -> Result<Option<(ChannelKey, C
     }
 }
 fn repl_message_sync(connection: ReplConnection, args: String) -> JoinHandle<Result<()>> {
+    // TODO: long-term syncing ALL messages, will be a bad idea, the system ideally will have some notion of pages
     let client = connection.client();
     let db = connection.db();
     let user = connection.user_key();

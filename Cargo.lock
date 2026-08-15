@@ -1447,6 +1447,7 @@ dependencies = [
  "env",
  "futures",
  "linefeed",
+ "pin-project-lite",
  "serde",
  "serde_json",
  "sled",

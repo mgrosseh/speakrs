@@ -24,22 +24,20 @@ impl<T> std::hash::Hash for UuidKey<T> {
     }
 }
 
-impl<T> Ord for UuidKey<T> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.uid.cmp(&other.uid)
+impl<T> PartialEq for UuidKey<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.uid.eq(&other.uid)
     }
 }
-
+impl<T> Eq for UuidKey<T> {}
 impl<T> PartialOrd for UuidKey<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.uid.partial_cmp(&other.uid)
     }
 }
-
-impl<T> Eq for UuidKey<T> {}
-impl<T> PartialEq for UuidKey<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.uid.eq(&other.uid)
+impl<T> Ord for UuidKey<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.uid.cmp(&other.uid)
     }
 }
 

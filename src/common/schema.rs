@@ -51,7 +51,7 @@ impl ChannelData {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UserData {
-    // IDEA: join data, bio
+    // IDEA: join date, bio
     pub name: String,
 }
 impl UserData {

@@ -322,6 +322,18 @@ impl<'a, T> CommandTreeCompletion<'a, T> for CommandTreeArgument<'a, T> where T:
 #[derive(Clone)]
 pub(super) struct CommandTree<'a, T>(pub &'a [CommandTreeMember<'a, T>]) where T: Argument + Copy + Clone;
 impl<'a, T> CommandTree<'a, T> where T: Argument + Copy + Clone {
+
+    /// Return the Member with `name` or None if not in this tree.
+    #[allow(unused)]
+    fn get(&self, name: &str) -> Option<&'a CommandTreeMember<'a, T>> {
+        for member in self.0 {
+            if member.name == name {
+                return Some(member);
+            }
+        }
+        None
+    }
+
     fn help_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for member in self.0 {
             member.help_fmt(f, 0, 35)?;
@@ -408,6 +420,7 @@ mod test {
     use super::*;
 
     #[derive(Clone, Copy)]
+    #[allow(unused)]
     enum TestTypes {
         String,
         Other,
@@ -447,7 +460,7 @@ mod test {
     }
     #[tokio::test]
     async fn test_binding() {
-        let binding = TEST_COMMANDS.0[0].binding.unwrap();
+        let binding = TEST_COMMANDS.get("test-binding").unwrap().binding.unwrap();
         let args = "het the tri".to_owned();
         binding(args).await.unwrap().unwrap();
     }

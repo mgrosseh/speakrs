@@ -105,10 +105,9 @@ pub fn fetch_all_channel_names() -> Result<Vec<String>> {
     }
     let db = connection.db();
     Ok(db
-        .channels()?
-        .range(..)
-        .map(|result| result.map(|(_, v)| v.get_name().to_owned()))
-        .collect::<Result<Vec<String>>>()?)
+       .channels()?
+       .map(|(_, v)| v.get_name().to_owned())
+       .collect::<Result<Vec<String>>>()?)
 }
 
 const HISTORY_FILE: &str = "repl.history";
@@ -144,7 +143,13 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
         if cmd == "quit" {
             break;
         }
-        execute_command(COMMANDS, line).await?;
+        match COMMANDS.execute_command(line).await {
+            Ok(false) => println!("You are currently not connected to a server, use `connect` or see `help`."),
+            Ok(true) => (),
+            Err(ExecuteError::NoSuchCommand) => println!("Command not found."),
+            Err(ExecuteError::NoBinding) => println!("Command has no associated binding, please report this bug."),
+            Err(ExecuteError::Error(e)) => print_error(e),
+        }
     }
     if let Err(e) = interface.save_history(history_file.clone()) {
         error!(
@@ -160,34 +165,7 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
 }
 
 fn check_connection() -> bool {
-    if !current_connection().read().unwrap().has() {
-        println!(
-            "You are currently not connected to a server, use `connect` or see `help`."
-        );
-        false
-    } else {
-        true
-    }
-}
-
-async fn execute_command(commands: &CommandTree<'_, ArgumentType>, line: String) -> Result<()> {
-    let option = commands.traverse_to_member(&line);
-    if option.is_none() {
-        println!("Command not found.");
-        return Ok(());
-    }
-    let (member, args) = option.unwrap();
-    if member.binding.is_none() {
-        println!("Command has no associated binding, please report this bug.");
-        return Ok(());
-    }
-    if let Err(e) = member.binding.unwrap()(args)
-        .await
-        .context(format!("While executing command: {}", line))
-    {
-        print_error(e);
-    }
-    Ok(())
+    current_connection().read().unwrap().has()
 }
 
 #[derive(Clone, Copy)]
@@ -243,7 +221,7 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
         "message",
         "Manipulate messages",
         &[
-            CommandTreeMember::binding(
+            CommandTreeMember::binding_if(
                 "add",
                 "Add a message in CHANNEL with CONTENT. If none, CONTENT can be entered interactively.",
                 &[
@@ -251,8 +229,9 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
                     CommandTreeArgument::Optional(ArgumentType::String, "CONTENT"),
                 ],
                 repl_message_add,
+                check_connection,
             ),
-            CommandTreeMember::binding(
+            CommandTreeMember::binding_if(
                 "sync",
                 "Sync messages in CHANNEL with server",
                 &[CommandTreeArgument::Required(
@@ -260,8 +239,9 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
                     "CHANNEL",
                 )],
                 repl_message_sync,
+                check_connection,
             ),
-            CommandTreeMember::binding(
+            CommandTreeMember::binding_if(
                 "view",
                 "View COUNT messages in CHANNEL, skipping the last OFFSET messages",
                 &[
@@ -270,6 +250,7 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
                     CommandTreeArgument::WithDefault(ArgumentType::Int, "OFFSET", "0"),
                 ],
                 repl_message_view,
+                check_connection,
             ),
         ],
     ),
@@ -277,7 +258,7 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
         "channel",
         "Manipulate channels",
         &[
-            CommandTreeMember::binding(
+            CommandTreeMember::binding_if(
                 "add",
                 "Add a channel with NAME and DESCRIPTION. If not provided, asks for them interactively (Multi-line DESCRIPTION).",
                 &[
@@ -285,13 +266,15 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
                     CommandTreeArgument::OptionalMany(ArgumentType::String, "DESCRIPTION"),
                 ],
                 repl_channel_add,
+                check_connection,
             ),
-            CommandTreeMember::binding("sync", "Sync channels with server", &[], repl_channel_sync),
-            CommandTreeMember::binding(
+            CommandTreeMember::binding_if("sync", "Sync channels with server", &[], repl_channel_sync, check_connection,),
+            CommandTreeMember::binding_if(
                 "list",
                 "List all locally known channels (see `sync`)",
                 &[],
                 repl_channel_list,
+                check_connection,
             ),
         ],
     ),
@@ -381,9 +364,6 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
 
 
 fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
-    if !check_connection() { // TODO: ideally better system
-        return tokio::spawn(async { Ok(()) });
-    }
     let (client, db, client_data) = clone_current_connection().unwrap();
     let user = client_data.user_key;
     tokio::spawn(async move {
@@ -431,9 +411,6 @@ fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
     })
 }
 fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
-    if !check_connection() { // TODO: ideally better system
-        return tokio::spawn(async { Ok(()) });
-    }
     // TODO: long-term syncing ALL messages, will be a bad idea, the system ideally will have some notion of pages
     let (client, db, client_data) = clone_current_connection().unwrap();
     let user = client_data.user_key;
@@ -481,9 +458,6 @@ fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
     })
 }
 fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {
-    if !check_connection() { // TODO: ideally better system
-        return tokio::spawn(async { Ok(()) });
-    }
     // TODO: channels
     let (_, db, __data) = clone_current_connection().unwrap();
     tokio::spawn(async move {
@@ -499,9 +473,6 @@ fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {
 }
 
 fn repl_channel_sync(_args: String) -> JoinHandle<Result<()>> {
-    if !check_connection() { // TODO: ideally better system
-        return tokio::spawn(async { Ok(()) });
-    }
     let (client, db, client_data) = clone_current_connection().unwrap();
     let user = client_data.user_key;
     tokio::spawn(async move {
@@ -522,9 +493,6 @@ fn repl_channel_sync(_args: String) -> JoinHandle<Result<()>> {
     })
 }
 fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
-    if !check_connection() { // TODO: ideally better system
-        return tokio::spawn(async { Ok(()) });
-    }
     let (client, db, client_data) = clone_current_connection().unwrap();
     let user = client_data.user_key;
     tokio::spawn(async move {
@@ -551,7 +519,7 @@ fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
         let desc = if !rest.trim().is_empty() {
             rest.to_string()
         } else {
-            println!(
+            println!( // TODO: BUG: ^C does not cancel the way its expected
                 "Enter channel description (multiline). Send EOF or enter an empty line to confirm, ^C to cancel."
             );
             let x = multiline_prompt("desc: ", |x| x.is_empty())?;
@@ -577,9 +545,6 @@ fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
 }
 
 fn repl_channel_list(_args: String) -> JoinHandle<Result<()>> {
-    if !check_connection() { // TODO: ideally better system
-        return tokio::spawn(async { Ok(()) });
-    }
     let (_, db, _) = clone_current_connection().unwrap();
     tokio::spawn(async move {
         let channels = db

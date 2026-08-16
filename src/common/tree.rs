@@ -212,6 +212,17 @@ where
         })
     }
 
+    /// Takes a closure and creates an iterator which calls that closure on each
+    /// element.
+    ///
+    /// Convenience method for `iter().map()`
+    pub fn map<T>(&self, map: impl Fn((K, V)) -> T) -> impl DoubleEndedIterator<Item = Result<T>> {
+        self.iter().map(move |result| match result {
+            Ok(kv) => Ok(map(kv)),
+            Err(e) => Err(e),
+        })
+    }
+
 
     /// Subscribe to `DBEvent`s that happen to all keys.
     /// `DBEvents` for particular keys are guaranteed to be

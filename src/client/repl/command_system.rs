@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use linefeed::{Completion, Prompter, Terminal};
 use std::{
     fmt::Display,
@@ -114,9 +114,11 @@ pub(super) struct CommandTreeMember<'a, T> where T: Argument + Copy + Clone {
     name: &'a str,
     desc: &'a str,
     pub binding: Option<BindingFn>,
+    condition: Option<fn() -> bool>,
     children: CommandTreePart<'a, T>,
 }
 pub(super) type BindingFn = fn(String) -> JoinHandle<Result<()>>;
+
 
 impl<'a, T> CommandTreeMember<'a, T> where T: Argument + Copy + Clone {
     /// Create a binding Member.
@@ -132,9 +134,31 @@ impl<'a, T> CommandTreeMember<'a, T> where T: Argument + Copy + Clone {
             desc,
             name,
             binding: Some(binding),
+            condition: None,
             children,
         }
     }
+
+    /// Create a conditional binding Member.
+    /// A binding is a simple Member with an associated binding that can be executed.
+    /// The condition is used to check whether to execute this binding, if evaluated to false, will not.
+    pub const fn binding_if(
+        name: &'a str,
+        desc: &'a str,
+        args: &'a [CommandTreeArgument<'a, T>],
+        binding: BindingFn,
+        condition: fn() -> bool,
+    ) -> Self {
+        let children = CommandTreePart::Arguments(args);
+        CommandTreeMember {
+            desc,
+            name,
+            binding: Some(binding),
+            condition: Some(condition),
+            children,
+        }
+    }
+
     /// Create a simple Member.
     /// Simple members have no function other than to designate a command exists, it cannot be executed.
     pub const fn simple(name: &'a str, desc: &'a str, args: &'a [CommandTreeArgument<'a, T>]) -> Self {
@@ -143,6 +167,7 @@ impl<'a, T> CommandTreeMember<'a, T> where T: Argument + Copy + Clone {
             desc,
             name,
             binding: None,
+            condition: None,
             children,
         }
     }
@@ -154,6 +179,7 @@ impl<'a, T> CommandTreeMember<'a, T> where T: Argument + Copy + Clone {
             desc,
             name,
             binding: None,
+            condition: None,
             children,
         }
     }
@@ -318,10 +344,16 @@ impl<'a, T> CommandTreeCompletion<'a, T> for CommandTreeArgument<'a, T> where T:
         self.get_argument_type().add_completions(compls, word);
     }
 }
+pub enum ExecuteError {
+    NoSuchCommand,
+    NoBinding,
+    Error(anyhow::Error)
+}
 
 #[derive(Clone)]
 pub(super) struct CommandTree<'a, T>(pub &'a [CommandTreeMember<'a, T>]) where T: Argument + Copy + Clone;
 impl<'a, T> CommandTree<'a, T> where T: Argument + Copy + Clone {
+
 
     /// Return the Member with `name` or None if not in this tree.
     #[allow(unused)]
@@ -374,6 +406,32 @@ impl<'a, T> CommandTree<'a, T> where T: Argument + Copy + Clone {
             None
         }
     }
+
+
+    /// Parses `line` and executes the command.
+    /// Returns `false` if the command has a condition that returned false, in this case the command did not run.
+    /// If the command run successfully returns `true`. Returns `ExecuteError` if the command could not execute or
+    /// failed for any other reason, specifically `ExecuteError::Error` is the error Result of the command if it failed.
+    pub async fn execute_command(&self, line: String) -> Result<bool, ExecuteError> {
+        let option = self.traverse_to_member(&line);
+        if option.is_none() {
+            return Err(ExecuteError::NoSuchCommand);
+        }
+        let (member, args) = option.unwrap();
+        if member.binding.is_none() {
+            return Err(ExecuteError::NoBinding);
+        }
+        if member.condition.is_some() && !member.condition.unwrap()() {
+            return Ok(false);
+        }
+        if let Err(e) = member.binding.unwrap()(args)
+            .await
+            .context(format!("While executing command: {}", line)) {
+            return Err(ExecuteError::Error(e));
+        }
+        Ok(true)
+    }
+
 }
 impl<T> Display for CommandTree<'_, T> where T: Argument + Copy + Clone {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

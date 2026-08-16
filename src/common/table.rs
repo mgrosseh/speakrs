@@ -1,19 +1,24 @@
-use crate::common::{codec::SerdeJsonCodec, key::UuidKey, tree::DBTree};
+use crate::common::{
+    codec::SerdeJsonCodec,
+    key::{SingletonKey, UuidKey, UuidNowKeygen},
+    tree::DBTree,
+};
 use std::marker::PhantomData;
 
-pub struct TableDecl<Tree>(&'static str, PhantomData<Tree>);
-
-impl<Tree> TableDecl<Tree> {
-    pub const fn named(tree_name: &'static str) -> Self {
-        Self(tree_name, PhantomData)
-    }
-}
-
-impl<V, K, Codec> TableDecl<DBTree<V, K, Codec>> {
+impl<V, K, Codec, Gen> TableDecl<DBTree<V, K, Codec, Gen>> {
     /// Open the tree in [`db`], if it doesn't exist yet, potentially creates it.
-    pub fn open(&self, db: &sled::Db) -> sled::Result<DBTree<V, K, Codec>> {
+    pub fn open(&self, db: &sled::Db) -> sled::Result<DBTree<V, K, Codec, Gen>> {
         db.open_tree(self.0).map(DBTree::from_raw)
     }
 }
 
-pub type SerdeTree<T, K = UuidKey<T>> = DBTree<K, T, SerdeJsonCodec>;
+pub struct TableDecl<Tree>(&'static str, PhantomData<Tree>);
+
+impl<V, K, Codec, Gen> DBTree<V, K, Codec, Gen> {
+    pub const fn decl(tree_name: &'static str) -> TableDecl<Self> {
+        TableDecl(tree_name, PhantomData)
+    }
+}
+
+pub type SerdeTree<T, K = UuidKey<T>, Gen = UuidNowKeygen> = DBTree<K, T, SerdeJsonCodec, Gen>;
+pub type SerdeSingleton<T> = DBTree<SingletonKey, T, SerdeJsonCodec>;

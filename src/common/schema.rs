@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::common::{
-    key::{PrefixedKey, SingletonKey, UuidKey},
-    table::{SerdeTree, TableDecl},
+    key::{PrefixedKey, PrefixedKeygen, UuidKey},
+    table::{SerdeSingleton, SerdeTree, TableDecl},
 };
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -33,6 +33,7 @@ impl ChannelData {
         }
     }
     /// Create a voice channel
+    #[allow(unused)] // TODO
     pub fn voice(display_name: String, desc: String) -> Self {
         Self {
             channel_type: ChannelType::Voice,
@@ -50,7 +51,7 @@ impl ChannelData {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UserData {
-    // IDEA: join data, bio
+    // IDEA: join date, bio
     pub name: String,
 }
 impl UserData {
@@ -66,9 +67,11 @@ pub struct MessageData {
 }
 impl MessageData {
     /// Create MessageData with timestamp now
+    #[allow(unused)] // TODO
     pub fn now(author: UserKey, content: String) -> Self {
         Self::new(Utc::now(), author, content)
     }
+    #[allow(unused)] // TODO
     pub fn new(timestamp: DateTime<Utc>, author: UserKey, content: String) -> Self {
         Self {
             timestamp,
@@ -95,11 +98,17 @@ pub type UserKey = UuidKey<UserData>;
 pub type ChannelKey = UuidKey<ChannelData>;
 pub type MessageKey = PrefixedKey<ChannelKey, MessageData>;
 
-pub const USERS_TABLE: TableDecl<SerdeTree<UserData>> = TableDecl::named("users");
-pub const CHANNELS_TABLE: TableDecl<SerdeTree<ChannelData>> = TableDecl::named("channels");
-pub const MESSAGES_TABLE: TableDecl<SerdeTree<MessageData, MessageKey>> =
-    TableDecl::named("messages");
-pub const SERVER_DATA_TABLE: TableDecl<SerdeTree<ServerData, SingletonKey>> =
-    TableDecl::named("server_data");
-pub const CLIENT_DATA_TABLE: TableDecl<SerdeTree<ClientData, SingletonKey>> =
-    TableDecl::named("client_data");
+pub type UsersTable = SerdeTree<UserData>;
+pub const USERS_TABLE: TableDecl<UsersTable> = UsersTable::decl("users");
+
+pub type ChannelsTable = SerdeTree<ChannelData>;
+pub const CHANNELS_TABLE: TableDecl<ChannelsTable> = ChannelsTable::decl("channels");
+
+pub type MessagesTable = SerdeTree<MessageData, MessageKey, PrefixedKeygen<ChannelKey>>;
+pub const MESSAGES_TABLE: TableDecl<MessagesTable> = MessagesTable::decl("messages");
+
+pub type ServerDataTable = SerdeSingleton<ServerData>;
+pub const SERVER_DATA_TABLE: TableDecl<ServerDataTable> = ServerDataTable::decl("server_data");
+
+pub type ClientDataTable = SerdeSingleton<ClientData>;
+pub const CLIENT_DATA_TABLE: TableDecl<ClientDataTable> = ClientDataTable::decl("client_data");

@@ -1,3 +1,4 @@
+use bytemuck::{Pod, PodCastError};
 use serde::{Deserialize, Serialize};
 use sled::IVec;
 
@@ -30,5 +31,20 @@ where
 
     fn decode(ivec: &IVec) -> Result<T, Self::Error> {
         serde_json::from_slice(ivec)
+    }
+}
+
+/// Direct "as bytes" encoding for plain old data types.
+#[allow(unused)]
+pub struct PodCodec;
+
+impl<T: Pod> DbValueCodec<T> for PodCodec {
+    type Error = PodCastError;
+    fn encode(value: &T) -> Result<IVec, Self::Error> {
+        Ok(bytemuck::bytes_of(value).into())
+    }
+
+    fn decode(ivec: &IVec) -> Result<T, Self::Error> {
+        bytemuck::try_pod_read_unaligned(ivec)
     }
 }

@@ -1,13 +1,10 @@
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
+use tracing::info;
 use uuid::Uuid;
 
-use crate::{
-    client::ClientConfig,
-    common::{schema::*, table::SerdeTree},
-    server::ServerConfig,
-};
+use crate::{client::ClientConfig, common::schema::*, server::ServerConfig};
 
 #[derive(Debug, Clone)]
 pub struct ServerDB {
@@ -23,20 +20,20 @@ impl ServerDB {
 
     /// Opens database at [`database_location`].
     /// If database did not exist before, it is NOT initialized!
-    pub fn open(database_location: &str) -> Self {
-        let db = sled::open(database_location).expect("open");
-        Self { db }
+    pub fn open(database_location: impl AsRef<Path>) -> sled::Result<Self> {
+        let db = sled::open(database_location)?;
+        Ok(Self { db })
     }
 
     /// Open database at [`location_location`]`.
     /// If database did not exist, use data to initialize it.
     pub fn create_or_open(database_location: impl AsRef<Path>, data: ServerData) -> Result<Self> {
-        let db = sled::open(database_location).expect("open");
-        let server_db = Self { db };
+        let server_db = Self::open(database_location)?;
 
         if server_db.is_init()? {
             return Ok(server_db);
         }
+        info!("Creating new server data");
         server_db.set_server_data(data)?;
 
         Ok(server_db)
@@ -61,9 +58,10 @@ impl ServerDB {
     }
 
     /// Queries the database, if initialized (server data was set) return true.
-    pub fn is_init(&self) -> sled::Result<bool> {
-        let tree = self.db.open_tree("server_data")?;
-        Ok(tree.get("data")?.is_some())
+    pub fn is_init(&self) -> Result<bool> {
+        let tree = SERVER_DATA_TABLE.open(&self.db)?;
+        Ok(tree.has_single()?)
+        //Ok(tree.get_single()?.is_some())
     }
 
     /// Get server data.
@@ -76,7 +74,7 @@ impl ServerDB {
     /// Either replaces existing data with new one or initializes the database with corresponding data.
     pub fn set_server_data(&self, data: ServerData) -> Result<()> {
         let tree = SERVER_DATA_TABLE.open(&self.db)?;
-        tree.insert_single(data)?;
+        tree.set_single(data)?;
         Ok(())
     }
 
@@ -91,20 +89,20 @@ impl ServerDB {
     /// Only intended to be used in client side code.
     pub fn set_client_data(&self, data: ClientData) -> Result<()> {
         let tree = CLIENT_DATA_TABLE.open(&self.db)?;
-        tree.insert_single(data)?;
+        tree.set_single(data)?;
         Ok(())
     }
 
     /// Get DBTree of all Messages, allowing querying, and storing data.
-    pub fn messages(&self) -> sled::Result<SerdeTree<MessageData, MessageKey>> {
+    pub fn messages(&self) -> sled::Result<MessagesTable> {
         MESSAGES_TABLE.open(&self.db)
     }
     /// Get DBTree of all Channels, allowing querying, and storing data.
-    pub fn channels(&self) -> sled::Result<SerdeTree<ChannelData>> {
+    pub fn channels(&self) -> sled::Result<ChannelsTable> {
         CHANNELS_TABLE.open(&self.db)
     }
     /// Get DBTree of all Users, allowing querying, and storing data.
-    pub fn users(&self) -> sled::Result<SerdeTree<UserData>> {
+    pub fn users(&self) -> sled::Result<UsersTable> {
         USERS_TABLE.open(&self.db)
         // self.db.open_tree("users").map(|t| DBTree::from_raw(t))
     }
@@ -114,10 +112,28 @@ impl ServerDB {
 mod test {
     use std::array;
 
-    use crate::common::key::{PrefixedKeygen, UuidNowKeygen};
-
     use super::*;
     use anyhow::{Context, Result};
+
+    #[test]
+    fn test_client_data() -> Result<()> {
+        let server = ServerDB::mock();
+        let client_data = ClientData {
+            user_key: UserKey::new_now(),
+        };
+        server.set_client_data(client_data.clone())?;
+        let x = server.get_client_data()?;
+        if x.is_none() {
+            println!("Found no data");
+            return Ok(());
+        }
+        let x = x.unwrap();
+        if x.user_key != client_data.user_key {
+            println!("No match: {} vs {}", x.user_key, client_data.user_key);
+        }
+
+        Ok(())
+    }
 
     // ======================================
     // => Temp Tests
@@ -132,7 +148,19 @@ mod test {
         let channel_key = ChannelKey::new_now();
         server
             .messages()?
-            .insert_in_context::<PrefixedKeygen<_>, _>(&channel_key, mock_messages)?;
+            .insert_in_context(channel_key, mock_messages)?;
+
+        let another_key = MessageKey::new_now(channel_key);
+        server.messages()?.set(
+            another_key,
+            MessageData::now(user_key, format!("Another message")),
+        )?;
+
+        let another_key = MessageKey::new_now(channel_key);
+        server.messages()?.set(
+            another_key,
+            MessageData::now(user_key, format!("Another message")),
+        )?;
 
         let (key, _) = server
             .messages()?
@@ -151,7 +179,7 @@ mod test {
         let server = ServerDB::mock();
 
         let user1 = UserData::new("user_1".to_string());
-        let user_key = server.users()?.insert::<UuidNowKeygen, _>(user1)?;
+        let user_key = server.users()?.insert(user1)?;
         println!("inserted user1");
         let channel_key = ChannelKey::new_now();
         let channel1 = ChannelData::text("Channel 1".to_string(), "An example channel".to_string());

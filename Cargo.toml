@@ -12,19 +12,20 @@ futures = "0.3"
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tarpc = { version = "0.37.0", features = ["full"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"]}
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 anyhow = "1.0.104"
 speakrs-gui = { path = "crates/speakrs-gui" }
 sled = "0.34.7"
 uuid = { version = "1.24.0", features = ["serde", "v4", "v7", "bytemuck"] }
 chrono = { version = "0.4.45", features = ["serde"] }
-bytemuck = "1.25.2"
 cpal = { version = "0.18.1", features = ["asio", "jack", "pipewire", "pulseaudio", "realtime"] }
 ringbuf = "0.5.1"
+bytemuck = { version = "1.25.2", features = ["extern_crate_std"] }
 env = "1.0.1"
 toml = "1.1.4"
 thiserror = "2.0.19"
+linefeed = "0.6.0"
+pin-project-lite = "0.2.17"
 
 [workspace]
 members = [".", "crates/speakrs-gui"]
-

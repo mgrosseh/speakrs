@@ -14,7 +14,8 @@ pub trait RpcService {
     async fn create_user(data: UserData) -> ServiceResult<UserKey>;
     async fn get_user(key: UserKey) -> ServiceResult<Option<UserData>>;
 
-    async fn insert_message(channel: ChannelKey, data: MessageData) -> ServiceResult<()>;
+    async fn get_new_messages_since(user: UserKey, since: Option<MessageKey>) -> ServiceResult<Vec<(MessageKey, MessageData)>>;
+    async fn insert_message(channel: ChannelKey, data: MessageData) -> ServiceResult<MessageKey>;
     async fn get_message(key: MessageKey) -> ServiceResult<Option<MessageData>>;
 }
 

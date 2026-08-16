@@ -24,8 +24,9 @@ jobs:
     - uses: actions/checkout@v4
     - name: install pipewire
       run: |
+        sudo add-apt-repository ppa:pipewire-debian/pipewire-upstream
         sudo apt-get update
-        sudo apt-get install pipewire-debian
+        sudo apt-get install pipewire pipewire-audio-client-libraries
     - name: Build
       run: cargo build --verbose
     - name: Run tests

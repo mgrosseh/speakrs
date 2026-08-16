@@ -39,6 +39,7 @@ pub mod rpc;
 pub mod schema;
 pub mod table;
 pub mod tree;
+pub mod audio;
 
 // ======================================
 // => Run Arguments

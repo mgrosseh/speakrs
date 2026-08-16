@@ -112,3 +112,5 @@ pub const SERVER_DATA_TABLE: TableDecl<ServerDataTable> = ServerDataTable::decl(
 
 pub type ClientDataTable = SerdeSingleton<ClientData>;
 pub const CLIENT_DATA_TABLE: TableDecl<ClientDataTable> = ClientDataTable::decl("client_data");
+
+pub type UserToken = UserKey;

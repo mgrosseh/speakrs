@@ -1,4 +1,4 @@
-use super::schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey};
+use super::{audio::AudioPacket, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey, UserToken}};
 
 #[tarpc::service]
 pub trait RpcService {
@@ -14,9 +14,11 @@ pub trait RpcService {
     async fn create_user(data: UserData) -> ServiceResult<UserKey>;
     async fn get_user(key: UserKey) -> ServiceResult<Option<UserData>>;
 
-    async fn get_new_messages_since(user: UserKey, since: Option<MessageKey>) -> ServiceResult<Vec<(MessageKey, MessageData)>>;
+    async fn get_new_messages_since(user: UserKey, since: Option<MessageKey>) -> ServiceResult<Vec<(MessageKey, MessageData)>>; // TODO: use UserToken
     async fn insert_message(channel: ChannelKey, data: MessageData) -> ServiceResult<MessageKey>;
     async fn get_message(key: MessageKey) -> ServiceResult<Option<MessageData>>;
+
+    async fn send_audio(user: UserToken, packet: AudioPacket) -> ServiceResult<()>;
 }
 
 pub type ServiceResult<T = ()> = Result<T, ServiceError>;

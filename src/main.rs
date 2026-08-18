@@ -27,10 +27,23 @@ use crate::common::Arguments;
 async fn main() -> anyhow::Result<()> {
     let args =  Arguments::parse();
 
-    tracing_subscriber::fmt::init();
+    // TODO: make sure files dont get tooo big
+    let log_directory = common::config_home().join("logs");
+    let log_file = match args.command {
+        common::Commands::Client(_) => "client_log.log",
+        common::Commands::Server(_) => "server_log.log",
+    };
+    let (non_blocking, _guard) = tracing_appender::non_blocking(tracing_appender::rolling::never(log_directory, log_file));
+    tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .init();
 
     match args.command {
-        common::Commands::Client(args) => client::run(args).await,
-        common::Commands::Server(args) => server::run(args).await,
+        common::Commands::Client(args) => {
+            client::run(args).await
+        }
+        common::Commands::Server(args) => {
+            server::run(args).await
+        }
     }
 }

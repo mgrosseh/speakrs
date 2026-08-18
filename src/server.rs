@@ -1,8 +1,8 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    path::PathBuf,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr}, path::PathBuf
 };
 
+use auth::{Permissions, authenticate_session, permission_guard, register_user};
 use tarpc::{
     context::Context,
     server::{Channel, incoming::Incoming},
@@ -10,14 +10,20 @@ use tarpc::{
 };
 
 use crate::common::{
-    self, audio::AudioPacket, database::ServerDB, rpc::{RpcService, ServiceResult}, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey, UserToken}
+    self, audio::AudioPacket, auth::SessionToken, database::DB, rpc::{RpcService, ServiceResult}, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey}
 };
 
 use futures::{future, prelude::*};
 
+mod auth;
+pub use auth::AuthError;
+
+mod server_schema;
+
+// TODO: use pagination (see `cursor`) instead of new_X_since
+
 #[derive(Debug, clap::Parser)]
 pub(crate) struct ServerArguments {
-    // TODO: reconsider port
     /// Port to serve tcp commands under (default: 51777)
     #[clap(short, long, default_value_t = 51777)]
     port: u16,
@@ -41,7 +47,7 @@ pub(crate) struct ServerArguments {
 }
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
-    let db = ServerDB::magic_open_server(args.name.to_string())?;
+    let db = DB::magic_open_server(args.name.to_string())?;
     command_server(args, db).await?;
     Ok(())
 }
@@ -88,31 +94,37 @@ impl ServerConfig {
 // and is used to start the server.
 #[derive(Clone)]
 struct HelloServer {
+    #[allow(unused)] // TODO: consider if needed
     addr: SocketAddr,
-    db: ServerDB,
+    db: DB,
 }
 
 impl HelloServer {
-    pub fn new(addr: SocketAddr, db: ServerDB) -> Self {
+    pub fn new(addr: SocketAddr, db: DB) -> Self {
         Self { addr, db }
     }
 }
 
 impl common::rpc::RpcService for HelloServer {
-    async fn hello(self, _: Context, name: String) -> String {
-        let msg_count = self.db.messages().unwrap().len();
-        format!(
-            "Hello, {name}! You are connected from {}. There are {} total messages.",
-            self.addr, msg_count,
-        )
+
+    async fn get_server_data(self, _: Context) -> ServiceResult<ServerData> {
+        Ok(self.db.get_server_data()?)
+    }
+
+    async fn register_user(self, _: Context, data: UserData, password: String) -> ServiceResult<UserKey> {
+        register_user(self.db, data, password)
+    }
+    async fn authenticate_session(self, _: Context, user: UserKey, password: String) -> ServiceResult<SessionToken> {
+        authenticate_session(self.db, user, password)
     }
 
     async fn get_new_messages_since(
         self,
         _: Context,
-        _user: UserKey,
+        _session: SessionToken,
         since: Option<MessageKey>,
     ) -> ServiceResult<Vec<(MessageKey, MessageData)>> {
+        // TODO: permissions, pagination
         Ok(if since.is_none() {
             self.db
                 .messages()?
@@ -129,42 +141,46 @@ impl common::rpc::RpcService for HelloServer {
     async fn insert_message(
         self,
         _: Context,
+        session: SessionToken,
         channel: ChannelKey,
         data: MessageData,
     ) -> ServiceResult<MessageKey> {
+        permission_guard(self.db.clone(), session, &[Permissions::CanWriteMessageIn(channel)])?;
         self.db
             .messages()?
             .insert_in_context(channel, data)
             .map_err(|e| e.into())
     }
-    async fn get_message(self, _: Context, key: MessageKey) -> ServiceResult<Option<MessageData>> {
+    async fn get_message(self, _: Context, session: SessionToken, key: MessageKey) -> ServiceResult<Option<MessageData>> {
+        permission_guard(self.db.clone(), session, &[Permissions::CanReadMessageIn(key.prefix())])?;
         self.db.messages()?.get(key).map_err(|e| e.into())
     }
 
-    async fn create_user(self, _: Context, data: UserData) -> ServiceResult<UserKey> {
-        self.db.users()?.insert(data).map_err(|e| e.into())
-    }
-    async fn get_user(self, _: Context, key: UserKey) -> ServiceResult<Option<UserData>> {
+    async fn get_user_info(self, _: Context, session: SessionToken, key: UserKey) -> ServiceResult<Option<UserData>> {
+        permission_guard(self.db.clone(), session, &[Permissions::CanSeeUser(key)])?;
         self.db.users()?.get(key).map_err(|e| e.into())
     }
 
     async fn create_channel(
         self,
         _: Context,
-        _user: UserKey,
+        session: SessionToken,
         data: ChannelData,
     ) -> ServiceResult<ChannelKey> {
+        permission_guard(self.db.clone(), session, &[Permissions::CanCreateChannel])?;
         self.db.channels()?.insert(data).map_err(|e| e.into())
     }
-    async fn get_channel(self, _: Context, key: ChannelKey) -> ServiceResult<Option<ChannelData>> {
+    async fn get_channel(self, _: Context, _session: SessionToken, key: ChannelKey) -> ServiceResult<Option<ChannelData>> {
         self.db.channels()?.get(key).map_err(|e| e.into())
     }
     async fn get_new_channels_since(
         self,
         _: Context,
-        _user: UserKey,
+        _session: SessionToken,
         since: Option<ChannelKey>,
     ) -> ServiceResult<Vec<(ChannelKey, ChannelData)>> {
+        // TODO: permissions, pagination
+        // TODO: ideally there would be a per-channel basis on whether to allow receiving it
         Ok(if since.is_none() {
             self.db
                 .channels()?
@@ -179,18 +195,13 @@ impl common::rpc::RpcService for HelloServer {
         })
     }
 
-    async fn get_server_data(self, _: Context) -> ServiceResult<ServerData> {
-        Ok(self.db.get_server_data()?)
-    }
-
-    #[allow(unused)] // TODO
-    async fn send_audio(self, _: Context, user: UserToken, packet: AudioPacket) -> ServiceResult<()> {
-        panic!("todo");
+    async fn send_audio(self, _: Context, _session: SessionToken, _packet: AudioPacket) -> ServiceResult<()> {
+        panic!("todo"); // TODO
     }
 }
 
-#[tracing::instrument]
-async fn command_server(args: ServerArguments, server: ServerDB) -> anyhow::Result<()> {
+#[tracing::instrument(skip(server))]
+async fn command_server(args: ServerArguments, server: DB) -> anyhow::Result<()> {
     let server_addr = if args.ipv6 {
         (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port)
     } else {

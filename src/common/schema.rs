@@ -10,6 +10,8 @@ use crate::common::{
     table::{SerdeSingleton, SerdeTree, TableDecl},
 };
 
+use super::auth::SessionToken;
+
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum ChannelType {
     Text,
@@ -82,16 +84,16 @@ impl MessageData {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ClientData {
+    pub user_key: UserKey,
+    pub session: Option<SessionToken>,  // TODO: handle cases when token expires and session is none
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ServerData {
     /// Host system unique name
     pub name: String,
     pub uuid: Uuid,
-}
-
-// TODO: this maybe should be moved into client only code somehow
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ClientData {
-    pub user_key: UserKey,
 }
 
 pub type UserKey = UuidKey<UserData>;
@@ -112,5 +114,3 @@ pub const SERVER_DATA_TABLE: TableDecl<ServerDataTable> = ServerDataTable::decl(
 
 pub type ClientDataTable = SerdeSingleton<ClientData>;
 pub const CLIENT_DATA_TABLE: TableDecl<ClientDataTable> = ClientDataTable::decl("client_data");
-
-pub type UserToken = UserKey;

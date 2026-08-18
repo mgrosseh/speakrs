@@ -40,6 +40,7 @@ pub mod schema;
 pub mod table;
 pub mod tree;
 pub mod audio;
+pub mod auth;
 
 // ======================================
 // => Run Arguments

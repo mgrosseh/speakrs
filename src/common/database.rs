@@ -7,11 +7,11 @@ use uuid::Uuid;
 use crate::{client::ClientConfig, common::schema::*, server::ServerConfig};
 
 #[derive(Debug, Clone)]
-pub struct ServerDB {
+pub struct DB {
     db: sled::Db,
 }
 
-impl ServerDB {
+impl DB {
     #[cfg(test)]
     pub fn mock() -> Self {
         let db = sled::Config::new().temporary(true).open().expect("open");
@@ -104,7 +104,11 @@ impl ServerDB {
     /// Get DBTree of all Users, allowing querying, and storing data.
     pub fn users(&self) -> sled::Result<UsersTable> {
         USERS_TABLE.open(&self.db)
-        // self.db.open_tree("users").map(|t| DBTree::from_raw(t))
+    }
+
+    /// Only meant to be used for extending functionality of DB, you should not use this directly.
+    pub fn get_raw(&self) -> &sled::Db {
+        &self.db
     }
 }
 
@@ -117,9 +121,10 @@ mod test {
 
     #[test]
     fn test_client_data() -> Result<()> {
-        let server = ServerDB::mock();
+        let server = DB::mock();
         let client_data = ClientData {
             user_key: UserKey::new_now(),
+            session: None,
         };
         server.set_client_data(client_data.clone())?;
         let x = server.get_client_data()?;
@@ -140,7 +145,7 @@ mod test {
     // ======================================
     #[test]
     fn test_read_messages() -> Result<()> {
-        let server = ServerDB::mock();
+        let server = DB::mock();
         let user_key = UserKey::new_now();
         let mock_messages: [_; 50] =
             array::from_fn(|i| MessageData::now(user_key, format!("some test message {i}")));
@@ -176,7 +181,7 @@ mod test {
 
     #[test]
     fn test_insert_and_read() -> Result<()> {
-        let server = ServerDB::mock();
+        let server = DB::mock();
 
         let user1 = UserData::new("user_1".to_string());
         let user_key = server.users()?.insert(user1)?;

@@ -26,6 +26,7 @@ toml = "1.1.4"
 thiserror = "2.0.19"
 linefeed = "0.6.0"
 pin-project-lite = "0.2.17"
+tracing-appender = "0.2.5"
 
 [workspace]
 members = [".", "crates/speakrs-gui"]

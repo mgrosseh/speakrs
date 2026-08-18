@@ -19,7 +19,7 @@ use anyhow::Result;
 use clap::Parser;
 use crate::common::{
     self,
-    database::ServerDB,
+    database::DB,
     rpc::RpcServiceClient,
     schema::{ClientData, UserKey},
 };
@@ -67,7 +67,7 @@ pub enum Connection {
 #[derive(Debug, Clone)]
 pub struct ActiveConnection {
     service_client: RpcServiceClient,
-    db: ServerDB,
+    db: DB,
     client_data: ClientData,
 }
 impl Connection {
@@ -76,7 +76,7 @@ impl Connection {
         transport.config_mut().max_frame_length(usize::MAX);
         Ok(RpcServiceClient::new(tarpc::client::Config::default(), transport.await?).spawn())
     }
-    fn new(service_client: RpcServiceClient, db: ServerDB, client_data: ClientData) -> Self {
+    fn new(service_client: RpcServiceClient, db: DB, client_data: ClientData) -> Self {
         Self::Active(ActiveConnection { service_client, db, client_data })
     }
     fn has(&self) -> bool {
@@ -85,7 +85,7 @@ impl Connection {
             Self::Active(_) => true,
         }
     }
-    fn unwrap(self) -> (RpcServiceClient, ServerDB, ClientData) {
+    fn unwrap(self) -> (RpcServiceClient, DB, ClientData) {
         match self {
             Self::Empty => panic!("ReplConnection: calling unwrap() on Empty, always call has() first."),
             Self::Active(c) => (c.service_client, c.db, c.client_data),
@@ -98,7 +98,7 @@ impl Connection {
             Self::Active(connection) => &connection.service_client,
         }
     }
-    fn db(&self) -> &ServerDB {
+    fn db(&self) -> &DB {
         match self {
             Self::Empty => panic!("ReplConnection: calling db() on Empty, always call has() first."),
             Self::Active(connection) => &connection.db,

@@ -1,24 +1,35 @@
-use super::{audio::AudioPacket, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey, UserToken}};
+use crate::server::AuthError;
+
+use super::{audio::AudioPacket, auth::SessionToken, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey}};
 
 #[tarpc::service]
 pub trait RpcService {
-    /// Returns a greeting for name.
-    async fn hello(name: String) -> String;
-
+    /// Get server name and uuid
     async fn get_server_data() -> ServiceResult<ServerData>;
 
-    async fn get_new_channels_since(user: UserKey, since: Option<ChannelKey>) -> ServiceResult<Vec<(ChannelKey, ChannelData)>>;
-    async fn create_channel(user: UserKey, data: ChannelData) -> ServiceResult<ChannelKey>;
-    async fn get_channel(key: ChannelKey) -> ServiceResult<Option<ChannelData>>;
+    /// Register a user with `data` and `password`, returning newly created `UserKey`.
+    async fn register_user(data: UserData, password: String) -> ServiceResult<UserKey>;
+    async fn authenticate_session(user: UserKey, password: String) -> ServiceResult<SessionToken>;
 
-    async fn create_user(data: UserData) -> ServiceResult<UserKey>;
-    async fn get_user(key: UserKey) -> ServiceResult<Option<UserData>>;
+    /// Get all channels created after `since` (or ALL if None).
+    async fn get_new_channels_since(session: SessionToken, since: Option<ChannelKey>) -> ServiceResult<Vec<(ChannelKey, ChannelData)>>;
+    /// Create a channel, returning the ChannelKey of the new channel.
+    async fn create_channel(session: SessionToken, data: ChannelData) -> ServiceResult<ChannelKey>;
+    /// Get channel data corresponding to `key`, if present.
+    async fn get_channel(session: SessionToken, key: ChannelKey) -> ServiceResult<Option<ChannelData>>;
 
-    async fn get_new_messages_since(user: UserKey, since: Option<MessageKey>) -> ServiceResult<Vec<(MessageKey, MessageData)>>; // TODO: use UserToken
-    async fn insert_message(channel: ChannelKey, data: MessageData) -> ServiceResult<MessageKey>;
-    async fn get_message(key: MessageKey) -> ServiceResult<Option<MessageData>>;
+    /// Get user data corresponding to `key`, if present.
+    async fn get_user_info(session: SessionToken, key: UserKey) -> ServiceResult<Option<UserData>>;
 
-    async fn send_audio(user: UserToken, packet: AudioPacket) -> ServiceResult<()>;
+    /// Get all messages created after `since` (or ALL if None).
+    async fn get_new_messages_since(session: SessionToken, since: Option<MessageKey>) -> ServiceResult<Vec<(MessageKey, MessageData)>>; // TODO: channel parameter to restrict messages to a channel
+    /// Create a message in `channel` with `data`, returning the MessageKey of the new message.
+    async fn insert_message(session: SessionToken, channel: ChannelKey, data: MessageData) -> ServiceResult<MessageKey>;
+    /// Get message data corresponding to `key`, if present.
+    async fn get_message(session: SessionToken, key: MessageKey) -> ServiceResult<Option<MessageData>>;
+
+    /// Send an audio packet to the server.
+    async fn send_audio(session: SessionToken, packet: AudioPacket) -> ServiceResult<()>;
 }
 
 pub type ServiceResult<T = ()> = Result<T, ServiceError>;
@@ -31,6 +42,8 @@ pub enum ServiceError {
     Anyhow(String),
     #[error("generic sled (db) error, with error message: `{0}`")]
     Sled(String),
+    #[error("error during authentication: `{0}`")]
+    AuthError(AuthError),
 }
 
 impl From<anyhow::Error> for ServiceError {

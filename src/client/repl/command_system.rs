@@ -344,11 +344,15 @@ impl<'a, T> CommandTreeCompletion<'a, T> for CommandTreeArgument<'a, T> where T:
         self.get_argument_type().add_completions(compls, word);
     }
 }
-// TODO: use thiserror
+#[derive(thiserror::Error, Debug)]
 pub enum ExecuteError {
+    #[error("Error while joining on binding.")]
     JoinError,
+    #[error("Specified command does not exist.")]
     NoSuchCommand,
+    #[error("Command has no associated binding.")]
     NoBinding,
+    #[error("Error during command execution: {0}")]
     Error(anyhow::Error)
 }
 

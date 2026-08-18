@@ -1,10 +1,10 @@
 use super::{ClientArguments, Connection, clone_current_connection, current_connection};
 
-use crate::common::{
+use crate::{client::client_schema::ClientData, common::{
     self,
     database::DB,
-    schema::{ChannelData, ChannelKey, ClientData, MessageData, MessageKey, UserData},
-};
+    schema::{ChannelData, ChannelKey, MessageData, MessageKey, UserData},
+}};
 use anyhow::{Context, Result};
 use linefeed::{Completion, Interface, ReadResult};
 use std::fmt::Debug;
@@ -146,10 +146,7 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
         match COMMANDS.execute_command(line).await {
             Ok(false) => println!("You are currently not connected to a server, use `connect` or see `help`."),
             Ok(true) => (),
-            Err(ExecuteError::NoSuchCommand) => println!("Command not found."),
-            Err(ExecuteError::NoBinding) => println!("Command has no associated binding, please report this bug."),
-            Err(ExecuteError::JoinError) => println!("Join error!"), // TODO
-            Err(ExecuteError::Error(e)) => print_error(e),
+            Err(e) => print_error(e),
         }
     }
     if let Err(e) = interface.save_history(history_file.clone()) {
@@ -395,7 +392,7 @@ fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
             println!("Expected CHANNEL_NAME arg.");
             return Ok(());
         }
-        let channel = db.channels()?.find(|kv| kv.1.get_name() == arg);
+        let channel = db.channels()?.try_find(|kv| kv.1.get_name() == arg);
         if channel.is_none() {
             println!("Could not find channel with name {}.", arg);
             return Ok(());
@@ -448,7 +445,7 @@ fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
             println!("Expected argument CHANNEL_NAME.");
             return Ok(());
         }
-        let channel = db.channels()?.find(|kv| kv.1.get_name() == arg);
+        let channel = db.channels()?.try_find(|kv| kv.1.get_name() == arg);
         if channel.is_none() {
             println!("Could not find channel with name {}.", arg);
             return Ok(());
@@ -456,7 +453,7 @@ fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
         let channel = channel.unwrap()?;
         println!("Syncing messages...");
         let last_known_message = db.messages()?
-                                   .filter(|kv| kv.0.prefix() == channel.0, true)
+                                   .try_filter(|kv| kv.0.prefix() == channel.0)
                                    .last()
                                    .map(|res| res.map(|kv| kv.0));
         let last_known_message = match last_known_message {

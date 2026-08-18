@@ -78,21 +78,6 @@ impl DB {
         Ok(())
     }
 
-    // TODO: these two might want to be moved into a client only version of database, unless it would be too impractical
-    /// Get client data, if present.
-    /// Only intended to be used in client side code.
-    pub fn get_client_data(&self) -> Result<Option<ClientData>> {
-        let tree = CLIENT_DATA_TABLE.open(&self.db)?;
-        Ok(tree.get_single()?)
-    }
-    /// Set client data.
-    /// Only intended to be used in client side code.
-    pub fn set_client_data(&self, data: ClientData) -> Result<()> {
-        let tree = CLIENT_DATA_TABLE.open(&self.db)?;
-        tree.set_single(data)?;
-        Ok(())
-    }
-
     /// Get DBTree of all Messages, allowing querying, and storing data.
     pub fn messages(&self) -> sled::Result<MessagesTable> {
         MESSAGES_TABLE.open(&self.db)
@@ -118,27 +103,6 @@ mod test {
 
     use super::*;
     use anyhow::{Context, Result};
-
-    #[test]
-    fn test_client_data() -> Result<()> {
-        let server = DB::mock();
-        let client_data = ClientData {
-            user_key: UserKey::new_now(),
-            session: None,
-        };
-        server.set_client_data(client_data.clone())?;
-        let x = server.get_client_data()?;
-        if x.is_none() {
-            println!("Found no data");
-            return Ok(());
-        }
-        let x = x.unwrap();
-        if x.user_key != client_data.user_key {
-            println!("No match: {} vs {}", x.user_key, client_data.user_key);
-        }
-
-        Ok(())
-    }
 
     // ======================================
     // => Temp Tests

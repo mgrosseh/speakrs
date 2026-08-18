@@ -17,11 +17,12 @@
  */
 use anyhow::Result;
 use clap::Parser;
+use client_schema::ClientData;
 use crate::common::{
     self,
     database::DB,
     rpc::RpcServiceClient,
-    schema::{ClientData, UserKey},
+    schema::{UserKey},
 };
 use std::{
     fmt::{Debug},
@@ -34,6 +35,7 @@ use tokio::{net::ToSocketAddrs};
 pub mod repl;
 
 mod systemaudio;
+mod client_schema;
 
 #[derive(Debug, Parser)]
 pub(crate) struct ClientArguments {

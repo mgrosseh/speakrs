@@ -44,32 +44,25 @@ pin_project! {
     }
 }
 
-// TODO: use thiserror
 #[allow(unused)]
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum DBTimeoutError {
-    ConvertError(anyhow::Error),
-    RecvTimeoutError(std::sync::mpsc::RecvTimeoutError)
+    #[error("Error decoding from database: {0}")]
+    DecodeError(#[from] anyhow::Error),
+    #[error("Request expired: {0}")]
+    RecvTimeoutError(#[from] std::sync::mpsc::RecvTimeoutError)
 }
-
-// TODO: I believe inner.drop will be called properly so no need to do any dropping manually
 
 impl<K, V, Codec, KeyGen> DBSubscriber<K, V, Codec, KeyGen>
 where
     K: AsRef<[u8]> + From<IVec>,
     Codec: DbValueCodec<V>, {
-    /// Attempts to wait for a value on this `Subscriber`, returning
+    /// Attempts to wait for a value on this [`DBSubscriber`], returning
     /// an error if no event arrives within the provided `Duration`
     /// or if the backing `Db` shuts down.
     #[allow(unused)]
     pub fn next_timeout(&mut self, timeout: Duration) -> std::result::Result<DBEvent<K, V>, DBTimeoutError> {
-        match self.inner.next_timeout(timeout).map(Self::decode_event) {
-            Ok(result) => match result {
-                Ok(value) => Ok(value),
-                Err(e) => Err(DBTimeoutError::ConvertError(e)),
-            },
-            Err(e) => Err(DBTimeoutError::RecvTimeoutError(e)),
-        }
+        Ok(Self::decode_event(self.inner.next_timeout(timeout)?)?)
     }
 
     fn decode_event(ev: Event) -> Result<DBEvent<K, V>> {

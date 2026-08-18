@@ -192,20 +192,19 @@ where
     }
 
     /// Returns a double ended iterator filtered by `filter`.
-    /// If a value is Err, include_err decides whether to include or not.
     ///
     /// Convenience method for `iter().filter()`
-    pub fn filter(&self, filter: impl Fn(&(K, V)) -> bool, include_err: bool) -> impl DoubleEndedIterator<Item = Result<(K, V)>> {
+    pub fn try_filter(&self, filter: impl Fn(&(K, V)) -> bool) -> impl DoubleEndedIterator<Item = Result<(K, V)>> {
         self.iter().filter(move |result| match result {
             Ok(kv) => filter(kv),
-            Err(_) => include_err,
+            Err(_) => true,
         })
     }
 
     /// Searches for a value that satisfies a predicate.
     ///
     /// Convenience method for `iter().find()`
-    pub fn find(&self, predicate: impl Fn(&(K, V)) -> bool) -> Option<Result<(K, V)>> {
+    pub fn try_find(&self, predicate: impl Fn(&(K, V)) -> bool) -> Option<Result<(K, V)>> {
         self.iter().find(move |result| match result {
             Ok(kv) => predicate(kv),
             Err(_) => true,
@@ -216,11 +215,8 @@ where
     /// element.
     ///
     /// Convenience method for `iter().map()`
-    pub fn map<T>(&self, map: impl Fn((K, V)) -> T) -> impl DoubleEndedIterator<Item = Result<T>> {
-        self.iter().map(move |result| match result {
-            Ok(kv) => Ok(map(kv)),
-            Err(e) => Err(e),
-        })
+    pub fn map<T>(&self, mut map_fn: impl FnMut((K, V)) -> T) -> impl DoubleEndedIterator<Item = Result<T>> {
+        self.iter().map(move |result| result.map(|v| map_fn(v)))
     }
 
 
@@ -280,8 +276,6 @@ where
         }
     }
 }
-
-// TODO: tests for watch
 
 #[cfg(test)]
 mod test {

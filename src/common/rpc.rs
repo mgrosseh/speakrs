@@ -1,11 +1,11 @@
 use crate::server::AuthError;
 
-use super::{audio::AudioPacket, auth::SessionToken, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey}};
+use super::{audio::AudioPacket, auth::SessionToken, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerInfoData, UserData, UserKey}};
 
 #[tarpc::service]
 pub trait RpcService {
     /// Get server name and uuid
-    async fn get_server_data() -> ServiceResult<ServerData>;
+    async fn get_server_data() -> ServiceResult<ServerInfoData>;
 
     /// Register a user with `data` and `password`, returning newly created `UserKey`.
     async fn register_user(data: UserData, password: String) -> ServiceResult<UserKey>;

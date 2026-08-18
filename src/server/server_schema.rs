@@ -1,19 +1,33 @@
+use blake2::{Blake2b, Digest, digest::consts::U32};
+use uuid::Uuid;
+
 use crate::common::{auth::{SessionData, SessionToken}, database::DB, schema::UserKey, table::{SerdeTree, TableDecl}};
 
+type HashStorage = [u8; 32];
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UserAuthData {
-    password: String,
+    salt: String,
+    #[serde(with = "serde_bytes")]
+    hash: HashStorage,
 }
 impl UserAuthData {
-    pub fn from_password(password: String) -> Self {
-        // TODO: never store passwords in clear-text -- unless for now, I guess...
+    pub fn from_password(password: &str) -> Self {
+        let salt = Uuid::new_v4().to_string();
         Self {
-            password
+            hash: Self::hash(&salt, &password),
+            salt: salt,
         }
     }
 
-    pub fn validate(&self, password: String) -> bool {
-        self.password == password // TODO: terrible lol
+    fn hash(salt: &str, password: &str) -> HashStorage {
+        let mut hasher = Blake2b::<U32>::new();
+        hasher.update(salt);
+        hasher.update(password);
+        hasher.finalize().into()
+    }
+
+    pub fn validate(&self, password: &str) -> bool {
+        self.hash == Self::hash(&self.salt, password)
     }
 }
 pub type UsersAuthTable = SerdeTree<UserAuthData, UserKey>;

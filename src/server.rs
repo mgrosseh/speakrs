@@ -10,7 +10,7 @@ use tarpc::{
 };
 
 use crate::common::{
-    self, audio::AudioPacket, auth::SessionToken, database::DB, rpc::{RpcService, ServiceResult}, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey}
+    self, audio::AudioPacket, auth::SessionToken, database::DB, rpc::{RpcService, ServiceResult}, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerInfoData, UserData, UserKey}
 };
 
 use futures::{future, prelude::*};
@@ -107,7 +107,7 @@ impl HelloServer {
 
 impl common::rpc::RpcService for HelloServer {
 
-    async fn get_server_data(self, _: Context) -> ServiceResult<ServerData> {
+    async fn get_server_data(self, _: Context) -> ServiceResult<ServerInfoData> {
         Ok(self.db.get_server_data()?)
     }
 

@@ -24,12 +24,8 @@ pub fn authenticate_session(
     user: UserKey,
     password: String,
 ) -> ServiceResult<SessionToken> {
-    let auth_data = db.users_auth()?.get(user)?;
-    if auth_data.is_none() {
-        return Err(ServiceError::AuthError(AuthError::NoSuchUser));
-    }
-    let auth_data = auth_data.unwrap();
-    if !auth_data.validate(password) {
+    let auth_data = db.users_auth()?.get(user)?.ok_or(ServiceError::AuthError(AuthError::NoSuchUser))?;
+    if !auth_data.validate(&password) {
         return Err(ServiceError::AuthError(AuthError::IncorrectPassword));
     }
     register_token(db, user)
@@ -43,7 +39,7 @@ pub fn register_user(db: DB, data: UserData, password: String) -> ServiceResult<
         .insert(data)
         .map_err(|e| Into::<ServiceError>::into(e))?;
     db.users_auth()?
-        .set(key, UserAuthData::from_password(password))
+        .set(key, UserAuthData::from_password(&password))
         .map_err(|e| Into::<ServiceError>::into(e))?;
     db.user_perms()?.set(key, UserPerms::default())?;
     Ok(key)

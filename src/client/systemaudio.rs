@@ -1,3 +1,6 @@
+#![allow(unused)]
+
+
 use cpal::{
     Error, InputCallbackInfo, OutputCallbackInfo, Sample, Stream, StreamConfig, traits::{DeviceTrait, HostTrait}
 };

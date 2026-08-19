@@ -344,9 +344,15 @@ impl<'a, T> CommandTreeCompletion<'a, T> for CommandTreeArgument<'a, T> where T:
         self.get_argument_type().add_completions(compls, word);
     }
 }
+#[derive(thiserror::Error, Debug)]
 pub enum ExecuteError {
+    #[error("Error while joining on binding.")]
+    JoinError,
+    #[error("Specified command does not exist.")]
     NoSuchCommand,
+    #[error("Command has no associated binding.")]
     NoBinding,
+    #[error("Error during command execution: {0}")]
     Error(anyhow::Error)
 }
 
@@ -413,22 +419,17 @@ impl<'a, T> CommandTree<'a, T> where T: Argument + Copy + Clone {
     /// If the command run successfully returns `true`. Returns `ExecuteError` if the command could not execute or
     /// failed for any other reason, specifically `ExecuteError::Error` is the error Result of the command if it failed.
     pub async fn execute_command(&self, line: String) -> Result<bool, ExecuteError> {
-        let option = self.traverse_to_member(&line);
-        if option.is_none() {
-            return Err(ExecuteError::NoSuchCommand);
+        let (member, args) = self.traverse_to_member(&line).ok_or(ExecuteError::NoSuchCommand)?;
+        let binding = member.binding.ok_or(ExecuteError::NoBinding)?;
+        if !member.condition.map_or(true, |c| c()) {
+            return Ok(false)
         }
-        let (member, args) = option.unwrap();
-        if member.binding.is_none() {
-            return Err(ExecuteError::NoBinding);
-        }
-        if member.condition.is_some() && !member.condition.unwrap()() {
-            return Ok(false);
-        }
-        if let Err(e) = member.binding.unwrap()(args)
+        binding(args)
             .await
-            .context(format!("While executing command: {}", line)) {
-            return Err(ExecuteError::Error(e));
-        }
+            .context("Join error while executing command")
+            .map_err(|_| ExecuteError::JoinError)?
+            .context(format!("While executing command: {}", line))
+            .map_err(ExecuteError::Error)?;
         Ok(true)
     }
 

@@ -1,17 +1,21 @@
 use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::{client::ClientConfig, common::schema::*, server::ServerConfig};
+use crate::{
+    client::ClientConfig,
+    common::{schema::*, table::OpenResult},
+    server::ServerConfig,
+};
 
 #[derive(Debug, Clone)]
-pub struct ServerDB {
+pub struct DB {
     db: sled::Db,
 }
 
-impl ServerDB {
+impl DB {
     #[cfg(test)]
     pub fn mock() -> Self {
         let db = sled::Config::new().temporary(true).open().expect("open");
@@ -27,7 +31,10 @@ impl ServerDB {
 
     /// Open database at [`location_location`]`.
     /// If database did not exist, use data to initialize it.
-    pub fn create_or_open(database_location: impl AsRef<Path>, data: ServerData) -> Result<Self> {
+    pub fn create_or_open(
+        database_location: impl AsRef<Path>,
+        data: ServerInfoData,
+    ) -> Result<Self> {
         let server_db = Self::open(database_location)?;
 
         if server_db.is_init()? {
@@ -46,7 +53,7 @@ impl ServerDB {
         let mut path = ServerConfig::get().get_database_directory();
         path.push(name.as_str());
         let uuid = Uuid::now_v7();
-        Self::create_or_open(path, ServerData { name, uuid })
+        Self::create_or_open(path, ServerInfoData { name, uuid })
     }
     /// Open database with corresponding to [`uuid`].
     /// Automatically (magically) find the location where databases are stored and select the database with corresponding uuid from it.
@@ -54,7 +61,7 @@ impl ServerDB {
     pub fn magic_open_client(name: String, uuid: Uuid) -> Result<Self> {
         let mut path = ClientConfig::get().get_database_directory();
         path.push(uuid.to_string().as_str());
-        Self::create_or_open(path, ServerData { name, uuid })
+        Self::create_or_open(path, ServerInfoData { name, uuid })
     }
 
     /// Queries the database, if initialized (server data was set) return true.
@@ -66,45 +73,34 @@ impl ServerDB {
 
     /// Get server data.
     /// Run [`ServerDB::is_init()`] first to check if it's safe to get data
-    pub fn get_server_data(&self) -> Result<ServerData> {
+    pub fn get_server_data(&self) -> Result<ServerInfoData> {
         let tree = SERVER_DATA_TABLE.open(&self.db)?;
-        tree.get_single()?.ok_or_else(|| anyhow!("Expect data in server_data, run is_init() before accessing or set_server_data() on db."))
+        tree.get_single()?.context("Expect data in server_data, run is_init() before accessing or set_server_data() on db.")
     }
     /// Set server data.
     /// Either replaces existing data with new one or initializes the database with corresponding data.
-    pub fn set_server_data(&self, data: ServerData) -> Result<()> {
+    pub fn set_server_data(&self, data: ServerInfoData) -> Result<()> {
         let tree = SERVER_DATA_TABLE.open(&self.db)?;
-        tree.set_single(data)?;
-        Ok(())
-    }
-
-    // TODO: these two might want to be moved into a client only version of database, unless it would be too impractical
-    /// Get client data, if present.
-    /// Only intended to be used in client side code.
-    pub fn get_client_data(&self) -> Result<Option<ClientData>> {
-        let tree = CLIENT_DATA_TABLE.open(&self.db)?;
-        Ok(tree.get_single()?)
-    }
-    /// Set client data.
-    /// Only intended to be used in client side code.
-    pub fn set_client_data(&self, data: ClientData) -> Result<()> {
-        let tree = CLIENT_DATA_TABLE.open(&self.db)?;
         tree.set_single(data)?;
         Ok(())
     }
 
     /// Get DBTree of all Messages, allowing querying, and storing data.
-    pub fn messages(&self) -> sled::Result<MessagesTable> {
+    pub fn messages(&self) -> OpenResult<MessagesTable> {
         MESSAGES_TABLE.open(&self.db)
     }
     /// Get DBTree of all Channels, allowing querying, and storing data.
-    pub fn channels(&self) -> sled::Result<ChannelsTable> {
+    pub fn channels(&self) -> OpenResult<ChannelsTable> {
         CHANNELS_TABLE.open(&self.db)
     }
     /// Get DBTree of all Users, allowing querying, and storing data.
-    pub fn users(&self) -> sled::Result<UsersTable> {
+    pub fn users(&self) -> OpenResult<UsersTable> {
         USERS_TABLE.open(&self.db)
-        // self.db.open_tree("users").map(|t| DBTree::from_raw(t))
+    }
+
+    /// Only meant to be used for extending functionality of DB, you should not use this directly.
+    pub fn get_raw(&self) -> &sled::Db {
+        &self.db
     }
 }
 
@@ -115,32 +111,12 @@ mod test {
     use super::*;
     use anyhow::{Context, Result};
 
-    #[test]
-    fn test_client_data() -> Result<()> {
-        let server = ServerDB::mock();
-        let client_data = ClientData {
-            user_key: UserKey::new_now(),
-        };
-        server.set_client_data(client_data.clone())?;
-        let x = server.get_client_data()?;
-        if x.is_none() {
-            println!("Found no data");
-            return Ok(());
-        }
-        let x = x.unwrap();
-        if x.user_key != client_data.user_key {
-            println!("No match: {} vs {}", x.user_key, client_data.user_key);
-        }
-
-        Ok(())
-    }
-
     // ======================================
     // => Temp Tests
     // ======================================
     #[test]
     fn test_read_messages() -> Result<()> {
-        let server = ServerDB::mock();
+        let server = DB::mock();
         let user_key = UserKey::new_now();
         let mock_messages: [_; 50] =
             array::from_fn(|i| MessageData::now(user_key, format!("some test message {i}")));
@@ -176,7 +152,7 @@ mod test {
 
     #[test]
     fn test_insert_and_read() -> Result<()> {
-        let server = ServerDB::mock();
+        let server = DB::mock();
 
         let user1 = UserData::new("user_1".to_string());
         let user_key = server.users()?.insert(user1)?;

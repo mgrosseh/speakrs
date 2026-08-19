@@ -1,44 +1,93 @@
-use super::schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerData, UserData, UserKey};
+use std::fmt::Display;
+
+use crate::{
+    common::{table::TableOpenError, tree::TreeError},
+    server::AuthError,
+};
+
+use super::{
+    audio::AudioPacket,
+    auth::SessionToken,
+    schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerInfoData, UserData, UserKey},
+};
 
 #[tarpc::service]
 pub trait RpcService {
-    /// Returns a greeting for name.
-    async fn hello(name: String) -> String;
+    /// Get server name and uuid
+    async fn get_server_data() -> ServiceResult<ServerInfoData>;
 
-    async fn get_server_data() -> ServiceResult<ServerData>;
+    /// Register a user with `data` and `password`, returning newly created `UserKey`.
+    async fn register_user(data: UserData, password: String) -> ServiceResult<UserKey>;
+    async fn authenticate_session(user: UserKey, password: String) -> ServiceResult<SessionToken>;
 
-    async fn get_new_channels_since(user: UserKey, since: Option<ChannelKey>) -> ServiceResult<Vec<(ChannelKey, ChannelData)>>;
-    async fn create_channel(user: UserKey, data: ChannelData) -> ServiceResult<ChannelKey>;
-    async fn get_channel(key: ChannelKey) -> ServiceResult<Option<ChannelData>>;
+    /// Get all channels created after `since` (or ALL if None).
+    async fn get_new_channels_since(
+        session: SessionToken,
+        since: Option<ChannelKey>,
+    ) -> ServiceResult<Vec<(ChannelKey, ChannelData)>>;
+    /// Create a channel, returning the ChannelKey of the new channel.
+    async fn create_channel(session: SessionToken, data: ChannelData) -> ServiceResult<ChannelKey>;
+    /// Get channel data corresponding to `key`, if present.
+    async fn get_channel(
+        session: SessionToken,
+        key: ChannelKey,
+    ) -> ServiceResult<Option<ChannelData>>;
 
-    async fn create_user(data: UserData) -> ServiceResult<UserKey>;
-    async fn get_user(key: UserKey) -> ServiceResult<Option<UserData>>;
+    /// Get user data corresponding to `key`, if present.
+    async fn get_user_info(session: SessionToken, key: UserKey) -> ServiceResult<Option<UserData>>;
 
-    async fn get_new_messages_since(user: UserKey, since: Option<MessageKey>) -> ServiceResult<Vec<(MessageKey, MessageData)>>;
-    async fn insert_message(channel: ChannelKey, data: MessageData) -> ServiceResult<MessageKey>;
-    async fn get_message(key: MessageKey) -> ServiceResult<Option<MessageData>>;
+    /// Get all messages created after `since` (or ALL if None).
+    async fn get_new_messages_since(
+        session: SessionToken,
+        since: Option<MessageKey>,
+    ) -> ServiceResult<Vec<(MessageKey, MessageData)>>; // TODO: channel parameter to restrict messages to a channel
+    /// Create a message in `channel` with `data`, returning the MessageKey of the new message.
+    async fn insert_message(
+        session: SessionToken,
+        channel: ChannelKey,
+        data: MessageData,
+    ) -> ServiceResult<MessageKey>;
+    /// Get message data corresponding to `key`, if present.
+    async fn get_message(
+        session: SessionToken,
+        key: MessageKey,
+    ) -> ServiceResult<Option<MessageData>>;
+
+    /// Send an audio packet to the server.
+    async fn send_audio(session: SessionToken, packet: AudioPacket) -> ServiceResult<()>;
 }
 
 pub type ServiceResult<T = ()> = Result<T, ServiceError>;
 
 #[derive(thiserror::Error, Debug, serde::Deserialize, serde::Serialize)]
 pub enum ServiceError {
-    #[error("generic placeholder error, with error message: `{0}`")]
-    Failed(String),
-    #[error("generic anyhow error, with error message: `{0}`")]
-    Anyhow(String),
-    #[error("generic sled (db) error, with error message: `{0}`")]
-    Sled(String),
+    #[error("Generic service error: `{0}`")]
+    Generic(String),
+    #[error("Error in database tree: `{0}`")]
+    Tree(String),
+    #[error("error during authentication: `{0}`")]
+    Auth(AuthError),
+    #[error("{0}")]
+    TableOpen(String),
+}
+
+impl<Enc, Dec> From<TreeError<Enc, Dec>> for ServiceError
+where
+    TreeError<Enc, Dec>: Display,
+{
+    fn from(value: TreeError<Enc, Dec>) -> Self {
+        Self::Tree(value.to_string())
+    }
 }
 
 impl From<anyhow::Error> for ServiceError {
     fn from(value: anyhow::Error) -> Self {
-        Self::Anyhow(value.to_string())
+        Self::Generic(value.to_string())
     }
 }
 
-impl From<sled::Error> for ServiceError {
-    fn from(value: sled::Error) -> Self {
-        Self::Sled(value.to_string())
+impl From<TableOpenError> for ServiceError {
+    fn from(value: TableOpenError) -> Self {
+        Self::TableOpen(value.to_string())
     }
 }

@@ -1,15 +1,14 @@
 use crate::common::key::generator::GenerateKey;
-use anyhow::Result;
 use sled::IVec;
 
 /// All potential shapes for `tree.insert` argument.
 pub trait DbInsertable<K, V, Gen>: Sized {
     type Return;
-    fn execute_insert(
+    fn execute_insert<E>(
         &self,
         generator: &Gen,
-        do_insert_entry: impl Fn(&K, &V) -> Result<()>,
-    ) -> Result<Self::Return>;
+        do_insert_entry: impl Fn(&K, &V) -> Result<(), E>,
+    ) -> Result<Self::Return, E>;
 }
 
 // Implementation for direct key,value pair insertion.
@@ -18,11 +17,11 @@ where
     K: AsRef<[u8]> + From<IVec>,
 {
     type Return = ();
-    fn execute_insert(
+    fn execute_insert<E>(
         &self,
         _generator: &Gen,
-        do_insert_entry: impl Fn(&K, &V) -> Result<()>,
-    ) -> Result<Self::Return> {
+        do_insert_entry: impl Fn(&K, &V) -> Result<(), E>,
+    ) -> Result<Self::Return, E> {
         do_insert_entry(&self.0, &self.1)
     }
 }
@@ -33,11 +32,11 @@ where
     K: AsRef<[u8]> + From<IVec>,
 {
     type Return = K;
-    fn execute_insert(
+    fn execute_insert<E>(
         &self,
         generator: &Gen,
-        do_insert_entry: impl Fn(&K, &V) -> Result<()>,
-    ) -> Result<Self::Return> {
+        do_insert_entry: impl Fn(&K, &V) -> Result<(), E>,
+    ) -> Result<Self::Return, E> {
         let key = generator.generate_next();
         do_insert_entry(&key, &self)?;
         Ok(key)
@@ -47,11 +46,11 @@ where
 impl<const N: usize, K, V, Gen: GenerateKey<K>> DbInsertable<K, V, Gen> for [V; N] {
     type Return = [K; N];
 
-    fn execute_insert(
+    fn execute_insert<E>(
         &self,
         generator: &Gen,
-        do_insert_entry: impl Fn(&K, &V) -> Result<()>,
-    ) -> Result<Self::Return> {
+        do_insert_entry: impl Fn(&K, &V) -> Result<(), E>,
+    ) -> Result<Self::Return, E> {
         let keys = std::array::from_fn(|_| generator.generate_next());
         keys.as_slice()
             .iter()
@@ -67,11 +66,11 @@ where
 {
     type Return = Vec<V::Return>;
 
-    fn execute_insert(
+    fn execute_insert<E>(
         &self,
         generator: &Gen,
-        do_insert_entry: impl Fn(&K, &V) -> Result<()>,
-    ) -> Result<Self::Return> {
+        do_insert_entry: impl Fn(&K, &V) -> Result<(), E>,
+    ) -> Result<Self::Return, E> {
         Ok(self
             .into_iter()
             .map(move |v| v.execute_insert(generator, &do_insert_entry))

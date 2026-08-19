@@ -1,9 +1,12 @@
 use super::{ClientArguments, Connection, clone_current_connection, current_connection};
 
-use crate::common::{
-    self,
-    database::ServerDB,
-    schema::{ChannelData, ChannelKey, ClientData, MessageData, MessageKey, UserData},
+use crate::{
+    client::client_schema::ClientData,
+    common::{
+        self,
+        database::DB,
+        schema::{ChannelData, ChannelKey, MessageData, MessageKey, UserData},
+    },
 };
 use anyhow::{Context, Result};
 use linefeed::{Completion, Interface, ReadResult};
@@ -12,7 +15,7 @@ use std::{
     io::{self},
     sync::Arc,
 };
-use tokio::{task::JoinHandle};
+use tokio::task::JoinHandle;
 use tracing::{Instrument, error, info, info_span, warn};
 
 use command_system::*;
@@ -105,9 +108,9 @@ pub fn fetch_all_channel_names() -> Result<Vec<String>> {
     }
     let db = connection.db();
     Ok(db
-       .channels()?
-       .map(|(_, v)| v.get_name().to_owned())
-       .collect::<Result<Vec<String>>>()?)
+        .channels()?
+        .map(|(_, v)| v.get_name().to_owned())
+        .collect::<Result<Vec<String>, _>>()?)
 }
 
 const HISTORY_FILE: &str = "repl.history";
@@ -144,11 +147,11 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
             break;
         }
         match COMMANDS.execute_command(line).await {
-            Ok(false) => println!("You are currently not connected to a server, use `connect` or see `help`."),
+            Ok(false) => println!(
+                "You are currently not connected to a server, use `connect` or see `help`."
+            ),
             Ok(true) => (),
-            Err(ExecuteError::NoSuchCommand) => println!("Command not found."),
-            Err(ExecuteError::NoBinding) => println!("Command has no associated binding, please report this bug."),
-            Err(ExecuteError::Error(e)) => print_error(e),
+            Err(e) => print_error(e),
         }
     }
     if let Err(e) = interface.save_history(history_file.clone()) {
@@ -268,7 +271,13 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
                 repl_channel_add,
                 check_connection,
             ),
-            CommandTreeMember::binding_if("sync", "Sync channels with server", &[], repl_channel_sync, check_connection,),
+            CommandTreeMember::binding_if(
+                "sync",
+                "Sync channels with server",
+                &[],
+                repl_channel_sync,
+                check_connection,
+            ),
             CommandTreeMember::binding_if(
                 "list",
                 "List all locally known channels (see `sync`)",
@@ -287,7 +296,6 @@ fn help(_: String) -> JoinHandle<Result<()>> {
     })
 }
 
-
 fn connect(args: String) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
         let (arg, rest) = split_first_word(&args);
@@ -295,6 +303,7 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
             return Ok(());
         }
         // TODO: bound and arg check
+        info!("Creating connection to server...");
         let connection = Connection::create_service_client(arg).await?;
         let data = connection
             .get_server_data(tarpc::context::current())
@@ -304,7 +313,7 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
             .context("Error while talking to server")?;
         println!("Found server `{}`", data.name);
 
-        let db = ServerDB::magic_open_client(data.name, data.uuid)?;
+        let db = DB::magic_open_client(data.name, data.uuid)?;
         let mut client_data = db
             .get_client_data()
             .context("Error while reading local database")?;
@@ -335,17 +344,44 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
                     _ => return Ok(()),
                 }
             }
+            let mut password = String::new();
+            while password.is_empty() {
+                match quick_prompt("Password: ")? {
+                    ReadResult::Input(x) => {
+                        password = x;
+                        break;
+                    }
+                    _ => {
+                        println!("Cancelled.");
+                        return Ok(());
+                    }
+                }
+            }
             let user_data = UserData::new(username.clone());
 
             let user_key = connection
-                .create_user(tarpc::context::current(), user_data.clone())
+                .register_user(
+                    tarpc::context::current(),
+                    user_data.clone(),
+                    password.clone(),
+                )
                 .instrument(info_span!("Asking server for new user"))
+                .await
+                .context("RpcError during connection attempt")?
+                .context("Error while talking to server")?;
+
+            let session = connection
+                .authenticate_session(tarpc::context::current(), user_key, password.clone())
+                .instrument(info_span!(
+                    "Authenticating with server using new credentials"
+                ))
                 .await
                 .context("RpcError during connection attempt")?
                 .context("Error while talking to server")?;
 
             let data = ClientData {
                 user_key: user_key.clone(),
+                session: Some(session),
             };
             client_data = Some(data.clone());
             db.set_client_data(data)
@@ -362,17 +398,17 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
     })
 }
 
-
 fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
     let (client, db, client_data) = clone_current_connection().unwrap();
     let user = client_data.user_key;
+    let session = client_data.session.unwrap(); // TODO handle no session
     tokio::spawn(async move {
         let (arg, rest) = split_first_word(&args);
         if args.is_empty() {
             println!("Expected CHANNEL_NAME arg.");
             return Ok(());
         }
-        let channel = db.channels()?.find(|kv| kv.1.get_name() == arg);
+        let channel = db.channels()?.try_find(|kv| kv.1.get_name() == arg);
         if channel.is_none() {
             println!("Could not find channel with name {}.", arg);
             return Ok(());
@@ -395,7 +431,12 @@ fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
 
         let key = client
             .clone()
-            .insert_message(tarpc::context::current(), channel_key, data.clone())
+            .insert_message(
+                tarpc::context::current(),
+                session,
+                channel_key,
+                data.clone(),
+            )
             .instrument(info_span!("Creating message in server"))
             .await?
             .context("Error while talking to server")?;
@@ -413,36 +454,34 @@ fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
 fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
     // TODO: long-term syncing ALL messages, will be a bad idea, the system ideally will have some notion of pages
     let (client, db, client_data) = clone_current_connection().unwrap();
-    let user = client_data.user_key;
+    let session = client_data.session.unwrap(); // TODO handle no session
 
     tokio::spawn(async move {
         let (arg, rest) = split_first_word(&args);
         // TODO: these arg checks should be handled by arg system
         if !arg_guard(rest) {
-            return Ok(());
+            return Ok::<(), anyhow::Error>(());
         }
         if arg.is_empty() {
             println!("Expected argument CHANNEL_NAME.");
             return Ok(());
         }
-        let channel = db.channels()?.find(|kv| kv.1.get_name() == arg);
+        let channel = db.channels()?.try_find(|kv| kv.1.get_name() == arg);
         if channel.is_none() {
             println!("Could not find channel with name {}.", arg);
             return Ok(());
         }
         let channel = channel.unwrap()?;
         println!("Syncing messages...");
-        let last_known_message = db.messages()?
-                                   .filter(|kv| kv.0.prefix() == channel.0, true)
-                                   .last()
-                                   .map(|res| res.map(|kv| kv.0));
-        let last_known_message = match last_known_message {
-            Some(Err(e)) => return Err(e),
-            Some(Ok(x)) => Some(x),
-            None => None,
-        };
+        let last_known_message = db
+            .messages()?
+            .try_filter(|kv| kv.0.prefix() == channel.0)
+            .last()
+            .transpose()?
+            .map(|kv| kv.0);
+
         let new_messages = client
-            .get_new_messages_since(tarpc::context::current(), user.clone(), last_known_message)
+            .get_new_messages_since(tarpc::context::current(), session, last_known_message)
             .instrument(info_span!("Asking server for message list"))
             .await?
             .context("Error while talking to server")?;
@@ -454,7 +493,7 @@ fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
             "Got {} new messages. Use `message view CHANNEL` to list them.",
             len
         );
-        Ok(())
+        Ok::<(), anyhow::Error>(())
     })
 }
 fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {
@@ -464,7 +503,7 @@ fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {
         let channels = db
             .messages()?
             .range(..)
-            .collect::<anyhow::Result<Vec<(MessageKey, MessageData)>>>()?;
+            .collect::<Result<Vec<(MessageKey, MessageData)>, _>>()?;
         for (_, value) in channels {
             println!("Message `{}`: \"{}\"", value.author, value.content)
         }
@@ -474,13 +513,13 @@ fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {
 
 fn repl_channel_sync(_args: String) -> JoinHandle<Result<()>> {
     let (client, db, client_data) = clone_current_connection().unwrap();
-    let user = client_data.user_key;
+    let session = client_data.session.unwrap(); // TODO handle no session
     tokio::spawn(async move {
         println!("Syncing channels...");
         let last_known_channel = db.channels()?.last()?.map(|kv| kv.0);
         let new_channels = client
             .clone()
-            .get_new_channels_since(tarpc::context::current(), user.clone(), last_known_channel)
+            .get_new_channels_since(tarpc::context::current(), session, last_known_channel)
             .instrument(info_span!("Asking server for channel list"))
             .await?
             .context("Error while talking to server")?;
@@ -494,7 +533,7 @@ fn repl_channel_sync(_args: String) -> JoinHandle<Result<()>> {
 }
 fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
     let (client, db, client_data) = clone_current_connection().unwrap();
-    let user = client_data.user_key;
+    let session = client_data.session.unwrap(); // TODO handle no session
     tokio::spawn(async move {
         let (args, rest) = split_opt_words(1, &args);
         let name = if args.len() == 1 {
@@ -519,7 +558,8 @@ fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
         let desc = if !rest.trim().is_empty() {
             rest.to_string()
         } else {
-            println!( // TODO: BUG: ^C does not cancel the way its expected
+            println!(
+                // TODO: BUG: ^C does not cancel the way its expected
                 "Enter channel description (multiline). Send EOF or enter an empty line to confirm, ^C to cancel."
             );
             let x = multiline_prompt("desc: ", |x| x.is_empty())?;
@@ -533,7 +573,7 @@ fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
 
         let key = client
             .clone()
-            .create_channel(tarpc::context::current(), user.clone(), data.clone())
+            .create_channel(tarpc::context::current(), session, data.clone())
             .instrument(info_span!("Creating channel in server"))
             .await?
             .context("Error while talking to server")?;
@@ -550,7 +590,7 @@ fn repl_channel_list(_args: String) -> JoinHandle<Result<()>> {
         let channels = db
             .channels()?
             .range(..)
-            .collect::<anyhow::Result<Vec<(ChannelKey, ChannelData)>>>()?;
+            .collect::<Result<Vec<(ChannelKey, ChannelData)>, _>>()?;
         for (_, value) in channels {
             println!(
                 "Channel `{}`: \"{}\"",

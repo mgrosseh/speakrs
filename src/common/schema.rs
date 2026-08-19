@@ -82,16 +82,10 @@ impl MessageData {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ServerData {
+pub struct ServerInfoData { // TODO: better name
     /// Host system unique name
     pub name: String,
     pub uuid: Uuid,
-}
-
-// TODO: this maybe should be moved into client only code somehow
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ClientData {
-    pub user_key: UserKey,
 }
 
 pub type UserKey = UuidKey<UserData>;
@@ -107,8 +101,5 @@ pub const CHANNELS_TABLE: TableDecl<ChannelsTable> = ChannelsTable::decl("channe
 pub type MessagesTable = SerdeTree<MessageData, MessageKey, PrefixedKeygen<ChannelKey>>;
 pub const MESSAGES_TABLE: TableDecl<MessagesTable> = MessagesTable::decl("messages");
 
-pub type ServerDataTable = SerdeSingleton<ServerData>;
+pub type ServerDataTable = SerdeSingleton<ServerInfoData>;
 pub const SERVER_DATA_TABLE: TableDecl<ServerDataTable> = ServerDataTable::decl("server_data");
-
-pub type ClientDataTable = SerdeSingleton<ClientData>;
-pub const CLIENT_DATA_TABLE: TableDecl<ClientDataTable> = ClientDataTable::decl("client_data");

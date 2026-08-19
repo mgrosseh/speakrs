@@ -22,6 +22,11 @@ jobs:
         target: desktop
         arch: linux_gcc_64
     - uses: actions/checkout@v4
+    - name: install pipewire
+      run: |
+        sudo add-apt-repository ppa:pipewire-debian/pipewire-upstream
+        sudo apt-get update
+        sudo apt-get install pipewire pipewire-audio-client-libraries libpipewire-0.3-{0,dev,modules} alsa-base libasound2-dev libjack-jackd2-dev libpulse-dev libdbus-1-dev
     - name: Build
       run: cargo build --verbose
     - name: Run tests

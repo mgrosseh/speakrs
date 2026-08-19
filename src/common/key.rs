@@ -9,9 +9,7 @@ pub use singleton::SingletonKey;
 use sled::IVec;
 pub use uuid::{UuidKey, UuidNowKeygen};
 
-// TODO: maybe rename; there could be confusion because of PrefixedKey and KeyPrefix
-// KeyPrefix kind of
-pub trait KeyPrefix<K> where K: AsRef<[u8]> + From<IVec> {
+pub trait KeyPrefix<K> {
     /// Convert this KeyPrefix to a sled prefix
     fn to_prefix(self) -> IVec;
 }

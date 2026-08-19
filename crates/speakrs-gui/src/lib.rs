@@ -11,11 +11,11 @@ pub fn run() {
 
     // Load the QML path into the engine
     if let Some(engine) = engine.as_mut() {
-        engine.load(&QUrl::from(r#"qrc:/qt/qml/com/kdab/cxx_qt/demo/qml/main/main.qml"#));
+        engine.load(&QUrl::from(r#"qrc:/qt/qml/speakrs/gui/qml/main/main.qml"#));
     }
 
     if let Some(engine) = engine.as_mut() {
-        engine.add_import_path(&QString::from("qrc:/qt/qml/com/kdab/cxx_qt/demo/qml/components"));
+        engine.add_import_path(&QString::from("qrc:/qt/qml/speakrs/gui/qml/components"));
     }
 
     if let Some(engine) = engine.as_mut() {

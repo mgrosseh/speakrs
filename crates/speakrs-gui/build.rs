@@ -2,7 +2,7 @@ use cxx_qt_build::{CxxQtBuilder, QmlModule};
 fn main() {
     println!("cargo::rustc-env=QMAKE=/usr/bin/qmake6");
     let mut builder = CxxQtBuilder::new_qml_module(
-        QmlModule::new("com.kdab.cxx_qt.demo")
+        QmlModule::new("speakrs.gui")
             .qml_files(["qml/main/main.qml", "qml/components/ListTile.qml"]),
     )
     // Link Qt's Network library

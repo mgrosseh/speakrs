@@ -1,6 +1,6 @@
 // UI Tile for displaying lists, like bookmarks, channel lists, user lists etc.
 
-import com.kdab.cxx_qt.demo 1.0
+import speakrs.gui 1.0
 import QtQuick
 
 Rectangle {

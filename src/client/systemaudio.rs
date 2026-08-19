@@ -1,17 +1,17 @@
 use cpal::{
-    Data, Error, InputCallbackInfo, OutputCallbackInfo, Sample, Stream, StreamConfig, traits::{DeviceTrait, HostTrait}
+    Error, InputCallbackInfo, OutputCallbackInfo, Sample, Stream, StreamConfig, traits::{DeviceTrait, HostTrait}
 };
 use ringbuf::{
     HeapRb,
-    traits::{Consumer, Producer, Split}
+    traits::{Consumer, Producer}
 };
 
-struct SystemSettings {
+pub struct SystemSettings {
     host: cpal::platform::Host,
-    output_device: Option<cpal::platform::Device>,
+    pub output_device: Option<cpal::platform::Device>,
     input_device: Option<cpal::platform::Device>,
-    output_config: Option<cpal::StreamConfig>,
-    input_config: Option<cpal::StreamConfig>,
+    pub output_config: Option<cpal::StreamConfig>,
+    pub input_config: Option<cpal::StreamConfig>,
 }
 
 impl Default for SystemSettings {
@@ -46,14 +46,14 @@ impl Default for SystemSettings {
     }
 }
 
-struct AudioBuffer {
+pub struct AudioBuffer {
     latency: f32,
     config: StreamConfig,
-    ring: HeapRb<f32>,
+    pub ring: HeapRb<f32>,
 }
 
 impl AudioBuffer {
-    fn new(latency: f32, config: StreamConfig) -> Self {
+    pub fn new(latency: f32, config: StreamConfig) -> Self {
         let latency_frames = (latency / 1_000.0) * config.sample_rate as f32;
         let latency_samples = latency_frames as usize * config.channels as usize;
         let ring = HeapRb::<f32>::new(latency_samples * 2);
@@ -63,11 +63,10 @@ impl AudioBuffer {
             ring,
         }
     }
+
 }
 
-fn receive_audio(sys: SystemSettings, buffer: AudioBuffer) -> Option<Stream> { // TODO audio argument has to be audio stream / array of f32. Seperate functions for vc, screenshare and gui sounds?
-    let (_, mut consumer) = buffer.ring.split();    // TODO need to feed streamed audio data into producer, maybe move to client
-
+pub(crate) fn receive_audio(sys: SystemSettings, mut consumer: impl Consumer<Item = f32> + Send + 'static) -> Option<Stream> { // TODO audio argument has to be audio stream / array of f32. Seperate functions for vc, screenshare and gui sounds?
     // feeding the streamed audio to the output
     let output_data_fn = move |data: &mut [f32], _: &OutputCallbackInfo| {
         let read = consumer.pop_slice(data);
@@ -92,8 +91,7 @@ fn receive_audio(sys: SystemSettings, buffer: AudioBuffer) -> Option<Stream> { /
     return stream;
 }
 
-fn capture_audio(sys: SystemSettings, buffer: AudioBuffer) -> Option<Stream> {
-    let (mut producer, _) = buffer.ring.split();
+pub(crate) fn capture_audio(sys: SystemSettings, mut producer: impl Producer<Item = f32> + Send + 'static) -> Option<Stream> {
 
     // feeding the input audio into the stream buffer
     let input_data_fn = move |data: &[f32], _: &InputCallbackInfo| {

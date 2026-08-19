@@ -34,6 +34,8 @@ use tokio::{net::ToSocketAddrs};
 pub mod repl;
 
 mod systemaudio;
+use ringbuf::traits::Split;
+use cpal::traits::StreamTrait;
 
 #[derive(Debug, Parser)]
 pub(crate) struct ClientArguments {
@@ -50,8 +52,39 @@ pub(crate) async fn run(args: ClientArguments) -> Result<()> {
         repl::repl(args).await
     }
 }
-fn gui(_args: ClientArguments) {
+
+fn gui(_args: ClientArguments) -> Result<()> {
+    let settings = systemaudio::SystemSettings::default();
+    //if default audio device works, monitor mic
+    if let Some(v) = settings.input_config{
+        let audio_buffer: systemaudio::AudioBuffer = systemaudio::AudioBuffer::new(30.0, v);
+        let (producer, consumer) = audio_buffer.ring.split();
+        let input_stream = systemaudio::capture_audio(Default::default(), producer);
+        let output_stream = systemaudio::receive_audio(Default::default(), consumer);
+        if let Some(input_stream) = input_stream{
+            match input_stream.play() {
+                Ok(v) => tracing::info!("audio input stream started"),
+                Err(e) => tracing::warn!("audio input stream not started"),
+            }
+        }
+        else {
+            tracing::warn!("No input audio")
+        }
+        if let Some(output_stream) = output_stream{
+            match output_stream.play() {
+                Ok(v) => tracing::info!("audio output stream started"),
+                Err(e) => tracing::warn!("audio output stream not started"),
+            }
+        }
+        else {
+            tracing::warn!("No output audio")
+        }
+    }
+    else {
+        tracing::warn!("Default Config not found");
+    }
     speakrs_gui::run();
+    return Ok(());
 }
 
 

@@ -24,9 +24,12 @@ pub fn authenticate_session(
     user: UserKey,
     password: String,
 ) -> ServiceResult<SessionToken> {
-    let auth_data = db.users_auth()?.get(user)?.ok_or(ServiceError::AuthError(AuthError::NoSuchUser))?;
+    let auth_data = db
+        .users_auth()?
+        .get(user)?
+        .ok_or(ServiceError::Auth(AuthError::NoSuchUser))?;
     if !auth_data.validate(&password) {
-        return Err(ServiceError::AuthError(AuthError::IncorrectPassword));
+        return Err(ServiceError::Auth(AuthError::IncorrectPassword));
     }
     register_token(db, user)
 }
@@ -55,14 +58,14 @@ fn validate_token(db: DB, token: SessionToken) -> ServiceResult<SessionData> {
     if let Some(data) = db.client_sessions()?.get(token)? {
         Ok(data)
     } else {
-        Err(ServiceError::AuthError(AuthError::InvalidToken))
+        Err(ServiceError::Auth(AuthError::InvalidToken))
     }
 }
 
 pub fn permission_guard(db: DB, token: SessionToken, perms: &[Permissions]) -> ServiceResult<()> {
     let data = validate_token(db.clone(), token)?;
     if !Permissions::check(perms, db, data.user)? {
-        Err(ServiceError::AuthError(AuthError::InsufficientPerms))
+        Err(ServiceError::Auth(AuthError::InsufficientPerms))
     } else {
         Ok(())
     }

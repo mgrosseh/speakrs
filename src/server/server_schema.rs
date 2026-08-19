@@ -1,7 +1,12 @@
 use blake2::{Blake2b, Digest, digest::consts::U32};
 use uuid::Uuid;
 
-use crate::common::{auth::{SessionData, SessionToken}, database::DB, schema::UserKey, table::{SerdeTree, TableDecl}};
+use crate::common::{
+    auth::{SessionData, SessionToken},
+    database::DB,
+    schema::UserKey,
+    table::{OpenResult, SerdeTree, TableDecl},
+};
 
 type HashStorage = [u8; 32];
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -34,25 +39,25 @@ pub type UsersAuthTable = SerdeTree<UserAuthData, UserKey>;
 pub const USERS_AUTH_TABLE: TableDecl<UsersAuthTable> = UsersAuthTable::decl("user_auth");
 
 pub type ClientSessionTable = SerdeTree<SessionData, SessionToken>;
-pub const CLIENT_SESSION_TABLE: TableDecl<ClientSessionTable> = ClientSessionTable::decl("client_sessions");
+pub const CLIENT_SESSION_TABLE: TableDecl<ClientSessionTable> =
+    ClientSessionTable::decl("client_sessions");
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
-pub struct UserPerms {
-}
+pub struct UserPerms {}
 
 pub type UserPermsTable = SerdeTree<UserPerms, UserKey>;
 pub const USER_PERMS_TABLE: TableDecl<UserPermsTable> = UserPermsTable::decl("user_perms");
 
 impl DB {
-    pub(super) fn users_auth(&self) -> sled::Result<UsersAuthTable> {
+    pub(super) fn users_auth(&self) -> OpenResult<UsersAuthTable> {
         USERS_AUTH_TABLE.open(self.get_raw())
     }
 
-    pub(super) fn client_sessions(&self) -> sled::Result<ClientSessionTable> {
+    pub(super) fn client_sessions(&self) -> OpenResult<ClientSessionTable> {
         CLIENT_SESSION_TABLE.open(self.get_raw())
     }
 
-    pub(super) fn user_perms(&self) -> sled::Result<UserPermsTable> {
+    pub(super) fn user_perms(&self) -> OpenResult<UserPermsTable> {
         USER_PERMS_TABLE.open(self.get_raw())
     }
 }

@@ -1,10 +1,14 @@
 use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::{client::ClientConfig, common::schema::*, server::ServerConfig};
+use crate::{
+    client::ClientConfig,
+    common::{schema::*, table::OpenResult},
+    server::ServerConfig,
+};
 
 #[derive(Debug, Clone)]
 pub struct DB {
@@ -27,7 +31,10 @@ impl DB {
 
     /// Open database at [`location_location`]`.
     /// If database did not exist, use data to initialize it.
-    pub fn create_or_open(database_location: impl AsRef<Path>, data: ServerInfoData) -> Result<Self> {
+    pub fn create_or_open(
+        database_location: impl AsRef<Path>,
+        data: ServerInfoData,
+    ) -> Result<Self> {
         let server_db = Self::open(database_location)?;
 
         if server_db.is_init()? {
@@ -68,7 +75,7 @@ impl DB {
     /// Run [`ServerDB::is_init()`] first to check if it's safe to get data
     pub fn get_server_data(&self) -> Result<ServerInfoData> {
         let tree = SERVER_DATA_TABLE.open(&self.db)?;
-        tree.get_single()?.ok_or_else(|| anyhow!("Expect data in server_data, run is_init() before accessing or set_server_data() on db."))
+        tree.get_single()?.context("Expect data in server_data, run is_init() before accessing or set_server_data() on db.")
     }
     /// Set server data.
     /// Either replaces existing data with new one or initializes the database with corresponding data.
@@ -79,15 +86,15 @@ impl DB {
     }
 
     /// Get DBTree of all Messages, allowing querying, and storing data.
-    pub fn messages(&self) -> sled::Result<MessagesTable> {
+    pub fn messages(&self) -> OpenResult<MessagesTable> {
         MESSAGES_TABLE.open(&self.db)
     }
     /// Get DBTree of all Channels, allowing querying, and storing data.
-    pub fn channels(&self) -> sled::Result<ChannelsTable> {
+    pub fn channels(&self) -> OpenResult<ChannelsTable> {
         CHANNELS_TABLE.open(&self.db)
     }
     /// Get DBTree of all Users, allowing querying, and storing data.
-    pub fn users(&self) -> sled::Result<UsersTable> {
+    pub fn users(&self) -> OpenResult<UsersTable> {
         USERS_TABLE.open(&self.db)
     }
 

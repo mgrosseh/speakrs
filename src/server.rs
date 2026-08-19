@@ -1,5 +1,6 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr}, path::PathBuf
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    path::PathBuf,
 };
 
 use auth::{Permissions, authenticate_session, permission_guard, register_user};
@@ -10,7 +11,12 @@ use tarpc::{
 };
 
 use crate::common::{
-    self, audio::AudioPacket, auth::SessionToken, database::DB, rpc::{RpcService, ServiceResult}, schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerInfoData, UserData, UserKey}
+    self,
+    audio::AudioPacket,
+    auth::SessionToken,
+    database::DB,
+    rpc::{RpcService, ServiceResult},
+    schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerInfoData, UserData, UserKey},
 };
 
 use futures::{future, prelude::*};
@@ -106,15 +112,24 @@ impl HelloServer {
 }
 
 impl common::rpc::RpcService for HelloServer {
-
     async fn get_server_data(self, _: Context) -> ServiceResult<ServerInfoData> {
         Ok(self.db.get_server_data()?)
     }
 
-    async fn register_user(self, _: Context, data: UserData, password: String) -> ServiceResult<UserKey> {
+    async fn register_user(
+        self,
+        _: Context,
+        data: UserData,
+        password: String,
+    ) -> ServiceResult<UserKey> {
         register_user(self.db, data, password)
     }
-    async fn authenticate_session(self, _: Context, user: UserKey, password: String) -> ServiceResult<SessionToken> {
+    async fn authenticate_session(
+        self,
+        _: Context,
+        user: UserKey,
+        password: String,
+    ) -> ServiceResult<SessionToken> {
         authenticate_session(self.db, user, password)
     }
 
@@ -129,13 +144,13 @@ impl common::rpc::RpcService for HelloServer {
             self.db
                 .messages()?
                 .range(..)
-                .collect::<anyhow::Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>, _>>()?
         } else {
             self.db
                 .messages()?
                 .range(since.unwrap()..)
                 .skip(1)
-                .collect::<anyhow::Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>, _>>()?
         })
     }
     async fn insert_message(
@@ -145,18 +160,36 @@ impl common::rpc::RpcService for HelloServer {
         channel: ChannelKey,
         data: MessageData,
     ) -> ServiceResult<MessageKey> {
-        permission_guard(self.db.clone(), session, &[Permissions::CanWriteMessageIn(channel)])?;
+        permission_guard(
+            self.db.clone(),
+            session,
+            &[Permissions::CanWriteMessageIn(channel)],
+        )?;
         self.db
             .messages()?
             .insert_in_context(channel, data)
             .map_err(|e| e.into())
     }
-    async fn get_message(self, _: Context, session: SessionToken, key: MessageKey) -> ServiceResult<Option<MessageData>> {
-        permission_guard(self.db.clone(), session, &[Permissions::CanReadMessageIn(key.prefix())])?;
+    async fn get_message(
+        self,
+        _: Context,
+        session: SessionToken,
+        key: MessageKey,
+    ) -> ServiceResult<Option<MessageData>> {
+        permission_guard(
+            self.db.clone(),
+            session,
+            &[Permissions::CanReadMessageIn(key.prefix())],
+        )?;
         self.db.messages()?.get(key).map_err(|e| e.into())
     }
 
-    async fn get_user_info(self, _: Context, session: SessionToken, key: UserKey) -> ServiceResult<Option<UserData>> {
+    async fn get_user_info(
+        self,
+        _: Context,
+        session: SessionToken,
+        key: UserKey,
+    ) -> ServiceResult<Option<UserData>> {
         permission_guard(self.db.clone(), session, &[Permissions::CanSeeUser(key)])?;
         self.db.users()?.get(key).map_err(|e| e.into())
     }
@@ -170,7 +203,12 @@ impl common::rpc::RpcService for HelloServer {
         permission_guard(self.db.clone(), session, &[Permissions::CanCreateChannel])?;
         self.db.channels()?.insert(data).map_err(|e| e.into())
     }
-    async fn get_channel(self, _: Context, _session: SessionToken, key: ChannelKey) -> ServiceResult<Option<ChannelData>> {
+    async fn get_channel(
+        self,
+        _: Context,
+        _session: SessionToken,
+        key: ChannelKey,
+    ) -> ServiceResult<Option<ChannelData>> {
         self.db.channels()?.get(key).map_err(|e| e.into())
     }
     async fn get_new_channels_since(
@@ -185,17 +223,22 @@ impl common::rpc::RpcService for HelloServer {
             self.db
                 .channels()?
                 .range(..)
-                .collect::<anyhow::Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>, _>>()?
         } else {
             self.db
                 .channels()?
                 .range(since.unwrap()..)
                 .skip(1)
-                .collect::<anyhow::Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>, _>>()?
         })
     }
 
-    async fn send_audio(self, _: Context, _session: SessionToken, _packet: AudioPacket) -> ServiceResult<()> {
+    async fn send_audio(
+        self,
+        _: Context,
+        _session: SessionToken,
+        _packet: AudioPacket,
+    ) -> ServiceResult<()> {
         panic!("todo"); // TODO
     }
 }

@@ -1,7 +1,9 @@
-use anyhow::Result;
 use sled::IVec;
 
-use crate::common::{codec::DbValueCodec, tree::DBTree};
+use crate::common::{
+    codec::DbValueCodec,
+    tree::{DBTree, TreeResult},
+};
 
 /// A table key that has only one allowed value. Use when you only want to store a singular record of given data type.
 #[derive(Clone, Copy)]
@@ -29,22 +31,22 @@ impl<V, Codec, Gen> DBTree<SingletonKey, V, Codec, Gen>
 where
     Codec: DbValueCodec<V>,
 {
-    pub fn has_single(&self) -> Result<bool> {
+    pub fn has_single(&self) -> TreeResult<bool, V, Codec> {
         self.has_key(SingletonKey)
     }
 
-    pub fn get_single(&self) -> Result<Option<V>> {
+    pub fn get_single(&self) -> TreeResult<Option<V>, V, Codec> {
         self.get(SingletonKey)
     }
 
     /// Insert a key to a new value
-    pub fn set_single(&self, value: V) -> Result<()> {
+    pub fn set_single(&self, value: V) -> TreeResult<(), V, Codec> {
         self.set(SingletonKey, value)
     }
 
     /// Insert a key to a new value, returing the old value if present.
     #[allow(unused)] // TODO
-    pub fn insert_replace_single(&self, value: V) -> Result<Option<V>> {
+    pub fn insert_replace_single(&self, value: V) -> TreeResult<Option<V>, V, Codec> {
         self.replace(SingletonKey, value)
     }
 }

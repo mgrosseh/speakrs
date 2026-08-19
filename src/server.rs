@@ -247,9 +247,9 @@ impl common::rpc::RpcService for HelloServer {
 #[tracing::instrument(skip(server))]
 async fn command_server(args: ServerArguments, server: DB) -> anyhow::Result<()> {
     let server_addr = if args.ipv6 {
-        (IpAddr::V6(Ipv6Addr::LOCALHOST), args.port)
+        (IpAddr::V6(Ipv6Addr::UNSPECIFIED), args.port)
     } else {
-        (IpAddr::V4(Ipv4Addr::LOCALHOST), args.port)
+        (IpAddr::V4(Ipv4Addr::UNSPECIFIED), args.port)
     };
     if args.verbose {
         println!(

@@ -73,7 +73,7 @@ const CONFIG_DIR_OVERRIDE_ENV: &str = "SPEAKRS_CONFIG_HOME";
 const CONFIG_DIR_NAME: &str = "speakrs";
 const CONFIG_NAME: &str = "speakrs.toml";
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
-pub struct Config {
+pub struct Config { // TODO: remove Option, tell serde to deserialize Default, and ignore serialize of Default values.
     /// Config for server, required if running in server mode
     server: Option<server::ServerConfig>,
     /// Config for client, required if running in client mode

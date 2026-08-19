@@ -48,8 +48,7 @@ pub(crate) struct ClientArguments {
 
 pub(crate) async fn run(args: ClientArguments) -> Result<()> {
     if args.gui {
-        gui(args);
-        return Ok(());
+        gui(args)
     } else {
         repl::repl(args).await
     }

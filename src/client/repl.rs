@@ -151,12 +151,7 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
                 "You are currently not connected to a server, use `connect` or see `help`."
             ),
             Ok(true) => (),
-            Err(ExecuteError::NoSuchCommand) => println!("Command not found."),
-            Err(ExecuteError::NoBinding) => {
-                println!("Command has no associated binding, please report this bug.")
-            }
-            Err(ExecuteError::JoinError) => println!("Join error!"), // TODO
-            Err(ExecuteError::Error(e)) => print_error(e),
+            Err(e) => print_error(e),
         }
     }
     if let Err(e) = interface.save_history(history_file.clone()) {

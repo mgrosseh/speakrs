@@ -303,6 +303,7 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
             return Ok(());
         }
         // TODO: bound and arg check
+        info!("Creating connection to server...");
         let connection = Connection::create_service_client(arg).await?;
         let data = connection
             .get_server_data(tarpc::context::current())

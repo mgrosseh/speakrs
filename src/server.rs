@@ -9,6 +9,7 @@ use tarpc::{
     server::{Channel, incoming::Incoming},
     tokio_serde::formats::Json,
 };
+use tracing::info;
 
 use crate::common::{
     self,
@@ -270,6 +271,7 @@ async fn command_server(args: ServerArguments, server: DB) -> anyhow::Result<()>
         .map(|channel| {
             let peer_addr = channel.transport().peer_addr().unwrap();
             let server = HelloServer::new(peer_addr, server.clone());
+            info!("Peer connected from {peer_addr}");
             channel.execute(server.serve()).for_each(|fut| async {
                 tokio::spawn(fut);
             })

@@ -219,6 +219,13 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
         )],
         connect,
     ),
+    CommandTreeMember::binding_if(
+        "login",
+        "Log into the connected server (or reauth). Ask for password interactively.",
+        &[],
+        login,
+        check_connection,
+    ),
     CommandTreeMember::group(
         "message",
         "Manipulate messages",
@@ -384,6 +391,31 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
 
         *current_connection().write().unwrap() = connection;
         println!("Connected to server.");
+        Ok(())
+    })
+}
+
+fn login(args: String) -> JoinHandle<Result<()>> {
+    tokio::spawn(async move {
+        if !arg_guard(&args) {
+            println!("Extra args after command.");
+            return Ok(());
+        }
+        let mut password = String::new();
+        while password.is_empty() {
+            match quick_prompt("Password: ")? {
+                ReadResult::Input(x) => {
+                    password = x;
+                    break;
+                }
+                _ => {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+            }
+        }
+        clone_current_connection().login(password).await?;
+        println!("Logged in!"); // TODO: auth check to ensure we're actually successfull
         Ok(())
     })
 }

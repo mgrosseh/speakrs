@@ -33,7 +33,11 @@ async fn main() -> anyhow::Result<()> {
         common::Commands::Client(_) => "client_log.log",
         common::Commands::Server(_) => "server_log.log",
     };
-    let (non_blocking, _guard) = tracing_appender::non_blocking(tracing_appender::rolling::never(log_directory, log_file));
+    let (non_blocking, _guard) = if args.verbose {
+        tracing_appender::non_blocking(std::io::stdout())
+    } else {
+        tracing_appender::non_blocking(tracing_appender::rolling::never(log_directory, log_file))
+    };
     tracing_subscriber::fmt()
         .with_writer(non_blocking)
         .init();

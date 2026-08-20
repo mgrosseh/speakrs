@@ -283,11 +283,37 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
             ),
         ],
     ),
+    CommandTreeMember::binding_if(
+        "dump_db",
+        "Dumps the DB of currently connected server to FILE. WARNING: this will load the whole database into memory, depending on size of the database this may cause significant lag and/or crashes.",
+        &[CommandTreeArgument::Required(ArgumentType::String, "FILE")],
+        dump,
+        check_connection,
+    ),
 ]);
 
 fn help(_: String) -> JoinHandle<Result<()>> {
     tokio::spawn(async {
         println!("{}", COMMANDS);
+        Ok(())
+    })
+}
+
+// TODO: add dump_name which does not require an active connection.
+fn dump(args: String) -> JoinHandle<Result<()>> {
+    tokio::spawn(async move {
+        let (arg, rest) = split_first_word(&args);
+        if arg.is_empty() {
+            println!("Requires filename to store to.");
+            return Ok(());
+        }
+        if !arg_guard(rest) {
+            return Ok(());
+        }
+        let connection = clone_current_connection();
+        connection.dump_db_to(arg)?;
+        println!("Dumped db to `{arg}`");
+
         Ok(())
     })
 }
@@ -415,13 +441,6 @@ fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
         }
         println!("Syncing messages...");
         let len = connection.download_all_messages().await?;
-        // TODO: utilize
-        // let last_known_message = db
-        //     .messages()?
-        //     .try_filter(|kv| kv.0.prefix() == channel.0)
-        //     .last()
-        //     .transpose()?
-        //     .map(|kv| kv.0);
 
         println!(
             "Got {} new messages. Use `message view CHANNEL` to list them.",

@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 use blake2::{Blake2b, Digest, digest::consts::U32};
 use uuid::Uuid;
 
 use crate::common::{
     auth::{SessionData, SessionToken},
-    database::DB,
+    database::{DB, DBCommonDump},
     schema::UserKey,
     table::{OpenResult, SerdeTree, TableDecl},
 };
@@ -60,4 +62,38 @@ impl DB {
     pub(super) fn user_perms(&self) -> OpenResult<UserPermsTable> {
         USER_PERMS_TABLE.open(self.get_raw())
     }
+}
+
+pub trait ServerDump {
+    fn dump(&self) -> anyhow::Result<DBDump>;
+}
+
+impl ServerDump for DB {
+    fn dump(&self) -> anyhow::Result<DBDump> {
+        let mut client_sessions = HashMap::new();
+        for result in self.client_sessions()?.iter() {
+            let (key, value) = result?;
+            client_sessions.insert(key, value);
+        }
+        let mut users_auth = HashMap::new();
+        for result in self.users_auth()?.iter() {
+            let (key, value) = result?;
+            users_auth.insert(key, value);
+        }
+        let mut user_perms = HashMap::new();
+        for result in self.user_perms()?.iter() {
+            let (key, value) = result?;
+            user_perms.insert(key, value);
+        }
+        let common = self.dump_shared()?;
+        Ok(DBDump { client_sessions, users_auth, user_perms, common })
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct DBDump {
+    client_sessions: HashMap<SessionToken, SessionData>,
+    users_auth: HashMap<UserKey, UserAuthData>,
+    user_perms: HashMap<UserKey, UserPerms>,
+    common: DBCommonDump,
 }

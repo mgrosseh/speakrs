@@ -1,4 +1,6 @@
-use crate::common::{auth::SessionToken, database::DB, schema::UserKey, table::{SerdeSingleton, TableDecl}};
+use std::path::Path;
+
+use crate::common::{auth::SessionToken, database::{DB, DBCommonDump}, schema::UserKey, table::{SerdeSingleton, TableDecl}};
 use anyhow::Result;
 
 
@@ -15,16 +17,34 @@ pub const CLIENT_DATA_TABLE: TableDecl<ClientDataTable> = ClientDataTable::decl(
 impl DB {
     /// Get client data, if present.
     /// Only intended to be used in client side code.
-    pub fn get_client_data(&self) -> Result<Option<ClientSession>> {
+    pub fn get_client_session(&self) -> Result<Option<ClientSession>> {
         let tree = CLIENT_DATA_TABLE.open(&self.get_raw())?;
         Ok(tree.get_single()?)
     }
     /// Set client data.
     /// Only intended to be used in client side code.
-    pub fn set_client_data(&self, data: ClientSession) -> Result<()> {
+    pub fn set_client_session(&self, data: ClientSession) -> Result<()> {
         let tree = CLIENT_DATA_TABLE.open(&self.get_raw())?;
         tree.set_single(data)?;
         Ok(())
     }
 
+}
+
+pub trait ClientDump {
+    fn dump(&self) -> Result<DBDump>;
+}
+
+impl ClientDump for DB {
+    fn dump(&self) -> Result<DBDump> {
+        let common = self.dump_shared()?;
+        let client_session = self.get_client_session()?;
+        Ok(DBDump { client_session, common })
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct DBDump {
+    client_session: Option<ClientSession>,
+    common: DBCommonDump,
 }

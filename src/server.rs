@@ -1,9 +1,9 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    path::PathBuf,
+    fs::File, net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr}, path::PathBuf
 };
 
 use auth::{Permissions, authenticate_session, permission_guard, register_user};
+use server_schema::ServerDump;
 use tarpc::{
     context::Context,
     server::{Channel, incoming::Incoming},
@@ -47,10 +47,19 @@ pub(crate) struct ServerArguments {
     /// Use ipv6 instead of ipv4
     #[clap(short, long, default_value_t = false)]
     ipv6: bool,
+    /// Dump the database to file
+    #[clap(long)]
+    dump_db_to: Option<String>
 }
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
     let db = DB::magic_open_server(args.name.to_string())?;
+    if let Some(path) = args.dump_db_to {
+        let dump = db.dump()?;
+        let file = File::create(path)?;
+        serde_json::to_writer_pretty(file, &dump)?;
+        return Ok(());
+    }
     command_server(args, db).await?;
     Ok(())
 }

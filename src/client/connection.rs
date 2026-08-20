@@ -6,20 +6,24 @@ use crate::common::{
 };
 use anyhow::{Context, Result};
 use std::{
-    fmt::Debug,
-    sync::{OnceLock, RwLock},
+    fmt::Debug, fs::File, path::Path, sync::{OnceLock, RwLock}
 };
 use tarpc::tokio_serde::formats::Json;
 use tokio::net::ToSocketAddrs;
 use tracing::{Instrument, info_span};
 
-use super::client_schema::ClientSession;
+use super::client_schema::{ClientDump, ClientSession};
 
-// TODO: in the future having only one connection is bad, so current_connection() and clone_current_connection() will probably need overhauls
 #[derive(Debug, Clone)]
 pub enum Connection {
+    /// An empty connection, i.e. not connected to any server.
     Empty,
+    /// A connection to a server, that is unregistered.
+    /// This means no user data has been associated with this server (the server needs to be registered with).
     Unregistered(UnregisteredConnection),
+    /// An active connection to a server.
+    /// Usually this means full communication with the server is possible, though reauthentication may be
+    /// necessary, if not yet logged in or the session expired.
     Active(ActiveConnection),
 }
 #[derive(Debug, Clone)]
@@ -39,6 +43,7 @@ impl Connection {
         transport.config_mut().max_frame_length(usize::MAX);
         Ok(RpcServiceClient::new(tarpc::client::Config::default(), transport.await?).spawn())
     }
+    /// Return true if `self` is active (registered), false if [`Connection::Unregistered`] or [`Connection::Empty`].
     pub fn is_registered(&self) -> bool {
         match self {
             Self::Empty => false,
@@ -46,6 +51,7 @@ impl Connection {
             Self::Active(_) => true,
         }
     }
+    /// Return true if `self` is connected, false if [`Connection::Empty`].
     pub fn is_connected(&self) -> bool {
         match self {
             Self::Empty => false,
@@ -53,6 +59,8 @@ impl Connection {
             Self::Active(_) => true,
         }
     }
+    /// If `is_connected()` is true, this will return the database of this connection.
+    /// Panics if `is_connected()` is false.
     pub fn db(&self) -> &DB {
         match self {
             Self::Empty => {
@@ -62,6 +70,15 @@ impl Connection {
             Self::Active(connection) => &connection.db,
         }
     }
+    /// If [`Connection::is_connected()`] is true, this will dump the database of this connection to file specified by `path`.
+    /// Panics if [`Connection::is_connected()`] is false.
+    pub fn dump_db_to(&self, path: impl AsRef<Path>) -> Result<()> {
+        let dump = self.db().dump()?;
+        let file = File::create(path)?;
+        serde_json::to_writer_pretty(file, &dump)?;
+        Ok(())
+    }
+    /// If `is_registered()` is true, this will return the client session of this connection.
     pub fn session(&self) -> &ClientSession {
         match self {
             Self::Empty => {
@@ -76,8 +93,6 @@ impl Connection {
         }
     }
 
-    // TODO: no longer panic here:
-
     pub async fn connect_to_ip(addr: impl ToSocketAddrs) -> Result<Connection> {
         let service_client = Connection::create_service_client(addr).await?;
         let data = service_client
@@ -88,7 +103,7 @@ impl Connection {
 
         let db = DB::magic_open_client(data.name, data.uuid)?;
         if let Some(client_data) = db
-            .get_client_data()
+            .get_client_session()
             .context("Error while reading local database")?
         {
             Ok(Self::Active(ActiveConnection {
@@ -128,7 +143,7 @@ impl Connection {
                     user_key,
                     token: None,
                 };
-                db.set_client_data(client_data.clone())
+                db.set_client_session(client_data.clone())
                     .context("Error while writing to local database")?;
                 db.users()?.insert((user_key, user_data))?;
                 Ok(Self::Active(ActiveConnection {
@@ -189,7 +204,7 @@ impl Connection {
                     user_key: user_key,
                     token: Some(token),
                 };
-                db.set_client_data(session)
+                db.set_client_session(session)
                     .context("Error while writing to local database")?;
 
                 Ok(Self::Active(ActiveConnection {
@@ -303,6 +318,8 @@ impl Connection {
     }
 }
 
+// TODO: in the future having only one connection is bad, so current_connection() and clone_current_connection() will probably need overhauls
+
 pub fn current_connection() -> &'static RwLock<Connection> {
     static CONNECTION: OnceLock<RwLock<Connection>> = OnceLock::new();
     CONNECTION.get_or_init(|| RwLock::new(Connection::Empty))
@@ -310,3 +327,12 @@ pub fn current_connection() -> &'static RwLock<Connection> {
 pub fn clone_current_connection() -> Connection {
     current_connection().read().unwrap().clone()
 }
+
+
+// TODO: utilize
+// let last_known_message = db
+//     .messages()?
+//     .try_filter(|kv| kv.0.prefix() == channel.0)
+//     .last()
+//     .transpose()?
+//     .map(|kv| kv.0);

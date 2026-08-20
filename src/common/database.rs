@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use anyhow::{Context, Result};
 use tracing::info;
@@ -102,6 +102,38 @@ impl DB {
     pub fn get_raw(&self) -> &sled::Db {
         &self.db
     }
+
+    /// Get a dump of all data in this database.
+    /// WARNING: this will read and the attempt to store in-memory the whole database.
+    /// If it is too big it may not fit into memory.
+    pub fn dump_shared(&self) -> Result<DBCommonDump> {
+        let server_info = self.get_server_data()?;
+        let mut messages = HashMap::new();
+        for result in self.messages()?.iter() {
+            let (key, value) = result?;
+            messages.insert(key, value);
+        }
+        let mut channels = HashMap::new();
+        for result in self.channels()?.iter() {
+            let (key, value) = result?;
+            channels.insert(key, value);
+        }
+        let mut users = HashMap::new();
+        for result in self.users()?.iter() {
+            let (key, value) = result?;
+            users.insert(key, value);
+        }
+
+        Ok(DBCommonDump { server_info, messages, channels, users })
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct DBCommonDump {
+    server_info: ServerInfoData,
+    messages: HashMap<MessageKey, MessageData>,
+    channels: HashMap<ChannelKey, ChannelData>,
+    users: HashMap<UserKey, UserData>,
 }
 
 #[cfg(test)]

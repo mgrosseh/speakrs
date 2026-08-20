@@ -1,14 +1,10 @@
 use super::{ClientArguments, Connection, clone_current_connection, current_connection};
 
-use crate::{
-    client::client_schema::ClientData,
-    common::{
-        self,
-        database::DB,
-        schema::{ChannelData, ChannelKey, MessageData, MessageKey, UserData},
-    },
+use crate::common::{
+    self,
+    schema::{ChannelData, ChannelKey, MessageData, MessageKey, UserData},
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use linefeed::{Completion, Interface, ReadResult};
 use std::fmt::Debug;
 use std::{
@@ -16,7 +12,7 @@ use std::{
     sync::Arc,
 };
 use tokio::task::JoinHandle;
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::{error, info, warn};
 
 use command_system::*;
 
@@ -103,7 +99,7 @@ fn arg_guard(args: &str) -> bool {
 // TODO: move proper place
 pub fn fetch_all_channel_names() -> Result<Vec<String>> {
     let connection = current_connection().read().unwrap();
-    if !connection.has() {
+    if !connection.is_registered() {
         return Ok(vec![]);
     }
     let db = connection.db();
@@ -168,7 +164,7 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
 }
 
 fn check_connection() -> bool {
-    current_connection().read().unwrap().has()
+    current_connection().read().unwrap().is_registered()
 }
 
 #[derive(Clone, Copy)]
@@ -236,11 +232,8 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
             ),
             CommandTreeMember::binding_if(
                 "sync",
-                "Sync messages in CHANNEL with server",
-                &[CommandTreeArgument::Required(
-                    ArgumentType::ChannelName,
-                    "CHANNEL",
-                )],
+                "Download ALL messages from server",
+                &[],
                 repl_message_sync,
                 check_connection,
             ),
@@ -302,22 +295,17 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
         if !arg_guard(rest) {
             return Ok(());
         }
-        // TODO: bound and arg check
+        if current_connection().read().unwrap().is_connected() {
+            println!("Already connected. Disconnect first.");
+            return Ok(());
+        }
         info!("Creating connection to server...");
-        let connection = Connection::create_service_client(arg).await?;
-        let data = connection
-            .get_server_data(tarpc::context::current())
-            .instrument(info_span!("Asking server for server data"))
-            .await
-            .context("RpcError during connection attempt")?
-            .context("Error while talking to server")?;
-        println!("Found server `{}`", data.name);
+        let mut connection = Connection::connect_to_ip(arg).await?;
+        let info = connection.db().get_server_data()?;
+        info!("Found server `{}`", info.name);
+        println!("Found server `{}`", info.name);
 
-        let db = DB::magic_open_client(data.name, data.uuid)?;
-        let mut client_data = db
-            .get_client_data()
-            .context("Error while reading local database")?;
-        if client_data.is_none() {
+        if !connection.is_registered() {
             println!("Server has not been registered with, would you like to create a user? [y/n]");
             match quick_prompt("[y/n]? ")? {
                 ReadResult::Input(x) if !(x.starts_with("y") || x.starts_with("Y")) => {
@@ -359,50 +347,23 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
             }
             let user_data = UserData::new(username.clone());
 
-            let user_key = connection
-                .register_user(
-                    tarpc::context::current(),
-                    user_data.clone(),
-                    password.clone(),
-                )
-                .instrument(info_span!("Asking server for new user"))
-                .await
-                .context("RpcError during connection attempt")?
-                .context("Error while talking to server")?;
-
-            let session = connection
-                .authenticate_session(tarpc::context::current(), user_key, password.clone())
-                .instrument(info_span!(
-                    "Authenticating with server using new credentials"
-                ))
-                .await
-                .context("RpcError during connection attempt")?
-                .context("Error while talking to server")?;
-
-            let data = ClientData {
-                user_key: user_key.clone(),
-                session: Some(session),
-            };
-            client_data = Some(data.clone());
-            db.set_client_data(data)
-                .context("Error while writing to local database")?;
-
-            db.users()?.insert((user_key, user_data))?;
+            connection = connection.register_user(user_data, &password).await?;
+            connection = connection.login(password).await?;
+            let user_key = connection.session().user_key;
             println!("Created user {} with uuid {}.", username, user_key);
         }
 
-        *current_connection().write().unwrap() =
-            Connection::new(connection, db, client_data.unwrap());
+        *current_connection().write().unwrap() = connection;
         println!("Connected to server.");
         Ok(())
     })
 }
 
 fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
-    let (client, db, client_data) = clone_current_connection().unwrap();
-    let user = client_data.user_key;
-    let session = client_data.session.unwrap(); // TODO handle no session
     tokio::spawn(async move {
+        let connection = clone_current_connection();
+        let db = connection.db().clone();
+        let user = connection.session().user_key;
         let (arg, rest) = split_first_word(&args);
         if args.is_empty() {
             println!("Expected CHANNEL_NAME arg.");
@@ -429,19 +390,8 @@ fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
         };
         let data = MessageData::now(user, content);
 
-        let key = client
-            .clone()
-            .insert_message(
-                tarpc::context::current(),
-                session,
-                channel_key,
-                data.clone(),
-            )
-            .instrument(info_span!("Creating message in server"))
-            .await?
-            .context("Error while talking to server")?;
+        let key = connection.send_message(channel_key, data.clone()).await?;
 
-        db.messages()?.set(key, data.clone())?;
         println!(
             "Created message at {} with key {} in channel \"{}\"",
             data.timestamp,
@@ -452,43 +402,24 @@ fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
     })
 }
 fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
+    // TODO: get rid of manual syncing
     // TODO: long-term syncing ALL messages, will be a bad idea, the system ideally will have some notion of pages
-    let (client, db, client_data) = clone_current_connection().unwrap();
-    let session = client_data.session.unwrap(); // TODO handle no session
-
     tokio::spawn(async move {
-        let (arg, rest) = split_first_word(&args);
+        let connection = clone_current_connection();
         // TODO: these arg checks should be handled by arg system
-        if !arg_guard(rest) {
+        if !arg_guard(&args) {
             return Ok::<(), anyhow::Error>(());
         }
-        if arg.is_empty() {
-            println!("Expected argument CHANNEL_NAME.");
-            return Ok(());
-        }
-        let channel = db.channels()?.try_find(|kv| kv.1.get_name() == arg);
-        if channel.is_none() {
-            println!("Could not find channel with name {}.", arg);
-            return Ok(());
-        }
-        let channel = channel.unwrap()?;
         println!("Syncing messages...");
-        let last_known_message = db
-            .messages()?
-            .try_filter(|kv| kv.0.prefix() == channel.0)
-            .last()
-            .transpose()?
-            .map(|kv| kv.0);
+        let len = connection.download_all_messages().await?;
+        // TODO: utilize
+        // let last_known_message = db
+        //     .messages()?
+        //     .try_filter(|kv| kv.0.prefix() == channel.0)
+        //     .last()
+        //     .transpose()?
+        //     .map(|kv| kv.0);
 
-        let new_messages = client
-            .get_new_messages_since(tarpc::context::current(), session, last_known_message)
-            .instrument(info_span!("Asking server for message list"))
-            .await?
-            .context("Error while talking to server")?;
-        let len = new_messages.len();
-        for (key, data) in new_messages {
-            db.messages()?.set(key, data)?;
-        }
         println!(
             "Got {} new messages. Use `message view CHANNEL` to list them.",
             len
@@ -498,9 +429,10 @@ fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
 }
 fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {
     // TODO: channels
-    let (_, db, __data) = clone_current_connection().unwrap();
     tokio::spawn(async move {
-        let channels = db
+        let connection = clone_current_connection();
+        let channels = connection
+            .db()
             .messages()?
             .range(..)
             .collect::<Result<Vec<(MessageKey, MessageData)>, _>>()?;
@@ -512,28 +444,14 @@ fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {
 }
 
 fn repl_channel_sync(_args: String) -> JoinHandle<Result<()>> {
-    let (client, db, client_data) = clone_current_connection().unwrap();
-    let session = client_data.session.unwrap(); // TODO handle no session
     tokio::spawn(async move {
         println!("Syncing channels...");
-        let last_known_channel = db.channels()?.last()?.map(|kv| kv.0);
-        let new_channels = client
-            .clone()
-            .get_new_channels_since(tarpc::context::current(), session, last_known_channel)
-            .instrument(info_span!("Asking server for channel list"))
-            .await?
-            .context("Error while talking to server")?;
-        let len = new_channels.len();
-        for channel in new_channels {
-            db.channels()?.insert((channel.0, channel.1))?;
-        }
+        let len = clone_current_connection().download_all_channels().await?;
         println!("Got {} new channels. Use `channel list` to list them.", len);
         Ok(())
     })
 }
 fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
-    let (client, db, client_data) = clone_current_connection().unwrap();
-    let session = client_data.session.unwrap(); // TODO handle no session
     tokio::spawn(async move {
         let (args, rest) = split_opt_words(1, &args);
         let name = if args.len() == 1 {
@@ -571,23 +489,16 @@ fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
         };
         let data = ChannelData::text(name.clone(), desc);
 
-        let key = client
-            .clone()
-            .create_channel(tarpc::context::current(), session, data.clone())
-            .instrument(info_span!("Creating channel in server"))
-            .await?
-            .context("Error while talking to server")?;
-
-        db.channels()?.insert((key, data))?;
+        let key = clone_current_connection().add_channel(data).await?;
         println!("Created channel {} with uuid {}", name, key);
         Ok(())
     })
 }
 
 fn repl_channel_list(_args: String) -> JoinHandle<Result<()>> {
-    let (_, db, _) = clone_current_connection().unwrap();
     tokio::spawn(async move {
-        let channels = db
+        let channels = clone_current_connection()
+            .db()
             .channels()?
             .range(..)
             .collect::<Result<Vec<(ChannelKey, ChannelData)>, _>>()?;

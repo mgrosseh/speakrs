@@ -19,6 +19,8 @@ pub trait RpcService {
     /// Register a user with `data` and `password`, returning newly created `UserKey`.
     async fn register_user(data: UserData, password: String) -> ServiceResult<UserKey>;
     async fn authenticate_session(user: UserKey, password: String) -> ServiceResult<SessionToken>;
+    /// Ensure `session` is valid currently.
+    async fn validate_session(session: SessionToken) -> ServiceResult<bool>;
 
     /// Get all channels created after `since` (or ALL if None).
     async fn get_new_channels_since(

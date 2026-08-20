@@ -239,6 +239,7 @@ where
     /// Returns a double ended iterator filtered by `filter`.
     ///
     /// Convenience method for `iter().filter()`
+    #[allow(unused)]
     pub fn try_filter(
         &self,
         filter: impl Fn(&(K, V)) -> bool,

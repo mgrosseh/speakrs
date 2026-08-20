@@ -62,6 +62,10 @@ fn validate_token(db: DB, token: SessionToken) -> ServiceResult<SessionData> {
     }
 }
 
+pub fn validate_session(db: DB, session: SessionToken) -> ServiceResult<bool> {
+    Ok(db.client_sessions()?.get(session)?.is_some())
+}
+
 pub fn permission_guard(db: DB, token: SessionToken, perms: &[Permissions]) -> ServiceResult<()> {
     let data = validate_token(db.clone(), token)?;
     if !Permissions::check(perms, db, data.user)? {

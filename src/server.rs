@@ -130,6 +130,10 @@ impl common::rpc::RpcService for HelloServer {
         authenticate_session(self.db, user, password)
     }
 
+    async fn validate_session(self, _: Context, session: SessionToken) -> ServiceResult<bool> {
+        auth::validate_session(self.db, session)
+    }
+
     async fn get_new_messages_since(
         self,
         _: Context,

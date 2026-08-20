@@ -52,6 +52,10 @@ pub mod auth;
 pub struct Arguments {
     #[command(subcommand)]
     pub command: Commands,
+    /// Be verbose (displays logging on stdout)
+    /// Note: this will disable the log file output
+    #[clap(short, long, default_value_t = false)]
+    pub verbose: bool,
 }
 
 #[derive(Subcommand)]

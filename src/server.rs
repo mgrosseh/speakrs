@@ -44,10 +44,6 @@ pub(crate) struct ServerArguments {
     /// If unsure consult the manual.
     #[clap(short, long, default_value_t="default_server".to_string())]
     name: String,
-    /// Be verbose
-    /// Also consider: RUST_LOG=debug to be even more verbose
-    #[clap(short, long, default_value_t = false)]
-    verbose: bool,
     /// Use ipv6 instead of ipv4
     #[clap(short, long, default_value_t = false)]
     ipv6: bool,
@@ -251,12 +247,7 @@ async fn command_server(args: ServerArguments, server: DB) -> anyhow::Result<()>
     } else {
         (IpAddr::V4(Ipv4Addr::UNSPECIFIED), args.port)
     };
-    if args.verbose {
-        println!(
-            "Serving under addr {} on port {}",
-            server_addr.0, server_addr.1
-        );
-    }
+    info!("Serving under addr {} on port {}", server_addr.0, server_addr.1);
     let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Json::default).await?;
     tracing::info!("Listening on port {}", listener.local_addr().port());
     listener.config_mut().max_frame_length(usize::MAX);

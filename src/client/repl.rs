@@ -393,7 +393,7 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
 
         *current_connection().write().unwrap() =
             Connection::new(connection, db, client_data.unwrap());
-        println!("Connected to server. You might want to run sync to load new content.");
+        println!("Connected to server.");
         Ok(())
     })
 }

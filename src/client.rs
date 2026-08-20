@@ -35,8 +35,7 @@ use tokio::{net::ToSocketAddrs};
 pub mod repl;
 
 mod systemaudio;
-use ringbuf::traits::Split;
-use cpal::traits::StreamTrait;
+use cpal::traits::{DeviceTrait, StreamTrait};
 mod client_schema;
 
 #[derive(Debug, Parser)]
@@ -55,17 +54,26 @@ pub(crate) async fn run(args: ClientArguments) -> Result<()> {
 }
 
 fn gui(_args: ClientArguments) -> Result<()> {
+    tracing::info!("{:?}", audio_feedback_test()); // TODO replace with actual Sound Interface for vc, video, ui sounds
+    speakrs_gui::run();
+    return Ok(());
+}
+
+fn audio_feedback_test() -> Result<()> {    // for testing audio input and output, TODO could be used for user settings
     let settings = systemaudio::SystemSettings::default();
     //if default audio device works, monitor mic
-    if let Some(v) = settings.input_config{
-        let audio_buffer: systemaudio::AudioBuffer = systemaudio::AudioBuffer::new(30.0, v);
-        let (producer, consumer) = audio_buffer.ring.split();
-        let input_stream = systemaudio::capture_audio(Default::default(), producer);
-        let output_stream = systemaudio::receive_audio(Default::default(), consumer);
+    if let Some(v) = settings.output_config{
+        tracing::info!("{:#?}", v);
+        tracing::info!("{:#?}", settings.input_config);
+        tracing::info!("{:?}", settings.output_device.unwrap().id()?);
+        tracing::info!("{:?}", settings.input_device.unwrap().id()?);
+        let audio_buffer: systemaudio::AudioBuffer = systemaudio::AudioBuffer::new(150.0, v);
+        let input_stream = systemaudio::capture_audio(Default::default(), audio_buffer.producer);
+        let output_stream = systemaudio::receive_audio(Default::default(), audio_buffer.consumer);
         if let Some(input_stream) = input_stream{
             match input_stream.play() {
-                Ok(v) => tracing::info!("audio input stream started"),
-                Err(e) => tracing::warn!("audio input stream not started"),
+                Ok(_) => tracing::info!("audio input stream started"),
+                Err(e) => tracing::warn!("audio input stream not started: {:?}", e),
             }
         }
         else {
@@ -73,21 +81,19 @@ fn gui(_args: ClientArguments) -> Result<()> {
         }
         if let Some(output_stream) = output_stream{
             match output_stream.play() {
-                Ok(v) => tracing::info!("audio output stream started"),
-                Err(e) => tracing::warn!("audio output stream not started"),
+                Ok(_) => tracing::info!("audio output stream started"),
+                Err(e) => tracing::warn!("audio output stream not started: {:?}", e),
             }
         }
         else {
-            tracing::warn!("No output audio")
+            tracing::warn!("No output audio");
         }
     }
     else {
         tracing::warn!("Default Config not found");
     }
-    speakrs_gui::run();
     return Ok(());
 }
-
 
 // ==============================
 // => Connection

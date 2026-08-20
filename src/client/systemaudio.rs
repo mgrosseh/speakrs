@@ -6,13 +6,13 @@ use cpal::{
 };
 use ringbuf::{
     HeapRb,
-    traits::{Consumer, Producer}
+    traits::{Consumer, Producer, Split, SplitRef}
 };
 
 pub struct SystemSettings {
-    host: cpal::platform::Host,
+    pub host: cpal::platform::Host,
     pub output_device: Option<cpal::platform::Device>,
-    input_device: Option<cpal::platform::Device>,
+    pub input_device: Option<cpal::platform::Device>,
     pub output_config: Option<cpal::StreamConfig>,
     pub input_config: Option<cpal::StreamConfig>,
 }
@@ -52,19 +52,26 @@ impl Default for SystemSettings {
 pub struct AudioBuffer {
     latency: f32,
     config: StreamConfig,
-    pub ring: HeapRb<f32>,
-}
+    pub consumer: ringbuf::wrap::caching::Caching<std::sync::Arc<ringbuf::SharedRb<ringbuf::storage::Heap<f32>>>, false, true>,
+    pub producer: ringbuf::wrap::caching::Caching<std::sync::Arc<ringbuf::SharedRb<ringbuf::storage::Heap<f32>>>, true, false>,}
 
 impl AudioBuffer {
     pub fn new(latency: f32, config: StreamConfig) -> Self {
         let latency_frames = (latency / 1_000.0) * config.sample_rate as f32;
         let latency_samples = latency_frames as usize * config.channels as usize;
-        let ring = HeapRb::<f32>::new(latency_samples * 2);
+        let ring = HeapRb::<f32>::new(latency_samples * 2); // stream buffer
+        let (mut producer, mut consumer) = ring.split();    // split buffer for input and output
+        // fill buffer with silence
+        for _ in 0..latency_samples {
+            producer.try_push(f32::EQUILIBRIUM).unwrap();
+        }
         Self {
             latency,
             config,
-            ring,
+            consumer,
+            producer
         }
+
     }
 
 }
@@ -110,7 +117,7 @@ pub(crate) fn capture_audio(sys: SystemSettings, mut producer: impl Producer<Ite
             else {
                 match v.build_input_stream(sys.input_config.unwrap(), input_data_fn, err_fn, None) {
                     Ok(x) => Some(x),
-                    Err(_) => None
+                    Err(e) => None,
                 }
             }
         },
@@ -121,5 +128,6 @@ pub(crate) fn capture_audio(sys: SystemSettings, mut producer: impl Producer<Ite
 
 // error handling
 fn err_fn(err: Error) {
+    tracing::error!("{:?}", err);
     todo!() // TODO how should errors be displayed for a user
 }

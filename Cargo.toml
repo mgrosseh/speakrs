@@ -18,7 +18,7 @@ speakrs-gui = { path = "crates/speakrs-gui" }
 sled = "0.34.7"
 uuid = { version = "1.24.0", features = ["serde", "v4", "v7", "bytemuck"] }
 chrono = { version = "0.4.45", features = ["serde"] }
-cpal = { version = "0.18.1", features = ["asio", "jack", "pipewire", "pulseaudio", "realtime"] }
+cpal = { version = "0.18.2", features = ["asio", "jack", "pipewire", "pulseaudio", "realtime", "realtime-dbus"] }
 ringbuf = "0.5.1"
 bytemuck = { version = "1.25.2", features = ["extern_crate_std"] }
 env = "1.0.1"

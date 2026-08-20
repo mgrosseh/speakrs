@@ -32,6 +32,8 @@ pub const PROG_YEAR: &str = "2026";
 #[allow(unused)] // TODO
 pub const PROG_AUTHORS: &str = "Miranda Große-Heilmann, Julie, Viki";
 
+pub mod audio;
+pub mod auth;
 pub mod codec;
 pub mod database;
 pub mod key;
@@ -39,8 +41,6 @@ pub mod rpc;
 pub mod schema;
 pub mod table;
 pub mod tree;
-pub mod audio;
-pub mod auth;
 
 // ======================================
 // => Run Arguments
@@ -77,7 +77,8 @@ const CONFIG_DIR_OVERRIDE_ENV: &str = "SPEAKRS_CONFIG_HOME";
 const CONFIG_DIR_NAME: &str = "speakrs";
 const CONFIG_NAME: &str = "speakrs.toml";
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
-pub struct Config { // TODO: remove Option, tell serde to deserialize Default, and ignore serialize of Default values.
+pub struct Config {
+    // TODO: remove Option, tell serde to deserialize Default, and ignore serialize of Default values.
     /// Config for server, required if running in server mode
     server: Option<server::ServerConfig>,
     /// Config for client, required if running in client mode

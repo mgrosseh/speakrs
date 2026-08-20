@@ -1,4 +1,7 @@
-use super::{ClientArguments, Connection, clone_current_connection, current_connection};
+use super::{
+    ClientArguments,
+    connection::{Connection, clone_current_connection, current_connection},
+};
 
 use crate::common::{
     self,

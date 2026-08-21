@@ -93,6 +93,12 @@ impl Connection {
         }
     }
 
+    /// Using an `addr` create a connection to the server.
+    /// If we find a session in the database, returns an [`Connection::Active`] connection,
+    /// otherwise returns [`Connection::Unregistered`]. When [`Connection::Active`], usually
+    /// communication is possible, though it could be the session has expired, in which case
+    /// a [`Connection::login`] is required. When [`Connection::Unregistered`], a
+    /// [`Connection::register_user`] is required.
     pub async fn connect_to_ip(addr: impl ToSocketAddrs) -> Result<Connection> {
         let service_client = Connection::create_service_client(addr).await?;
         let data = service_client
@@ -102,14 +108,14 @@ impl Connection {
             .context("Error while talking to server")?;
 
         let db = DB::magic_open_client(data.name, data.uuid)?;
-        if let Some(client_data) = db
+        if let Some(client_session) = db
             .get_client_session()
             .context("Error while reading local database")?
         {
             Ok(Self::Active(ActiveConnection {
                 service_client,
                 db,
-                client_session: client_data,
+                client_session,
             }))
         } else {
             Ok(Self::Unregistered(UnregisteredConnection {
@@ -119,6 +125,10 @@ impl Connection {
         }
     }
 
+    /// Registers the user indicated by `user_data` with `password`.
+    /// This is only valid on an [`Connection::Unregistered`], otherwise will result in Err.
+    /// Exchanges password with the server and on successful exchange, a session is created.
+    /// Note that after this a [`Connection::login`] is required.
     pub async fn register_user(self, user_data: UserData, password: &str) -> Result<Self> {
         match self {
             Self::Empty => Err(anyhow::anyhow!(
@@ -155,16 +165,19 @@ impl Connection {
         }
     }
 
+    /// Verifies that we are still logged in.
+    /// Communicates with the server to verify the current session is valid,
+    /// otherwise returns false.
     pub async fn verify_login(&self) -> Result<bool> {
         Ok(match self {
             Self::Empty => false,
             Self::Unregistered(_) => false,
             Self::Active(ActiveConnection {
                 service_client,
-                client_session: client_data,
+                client_session,
                 ..
             }) => {
-                if let Some(session) = client_data.token {
+                if let Some(session) = client_session.token {
                     service_client
                         .validate_session(tarpc::context::current(), session)
                         .instrument(info_span!("Validating stored session"))
@@ -177,6 +190,9 @@ impl Connection {
         })
     }
 
+    /// Logs into the server.
+    /// Using `password` authenticates user stored in [`ClientSession`] database.
+    /// Returns a new [`Connection::Active`] that is logged into the server.
     pub async fn login(self, password: String) -> Result<Self> {
         if self.verify_login().await? {
             return Ok(self);

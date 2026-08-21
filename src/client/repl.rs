@@ -414,8 +414,8 @@ fn login(args: String) -> JoinHandle<Result<()>> {
                 }
             }
         }
-        clone_current_connection().login(password).await?;
-        println!("Logged in!"); // TODO: auth check to ensure we're actually successfull
+        *current_connection().write().unwrap() = clone_current_connection().login(password).await?;
+        println!("Logged in!");
         Ok(())
     })
 }

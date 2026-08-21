@@ -1,133 +1,116 @@
 #![allow(unused)]
 
 
+use std::{sync::Arc, time::Duration};
+
 use cpal::{
-    Error, InputCallbackInfo, OutputCallbackInfo, Sample, Stream, StreamConfig, traits::{DeviceTrait, HostTrait}
+    Error, InputCallbackInfo, OutputCallbackInfo, Sample, SampleFormat, Stream, StreamConfig, platform::{Device, Host}, traits::{DeviceTrait, HostTrait}
 };
 use ringbuf::{
-    HeapRb,
-    traits::{Consumer, Producer, Split, SplitRef}
+    HeapRb, SharedRb, traits::{Consumer, Producer, Split, SplitRef}, wrap::caching::Caching
 };
+use anyhow::Result;
 
-pub struct SystemSettings {
-    pub host: cpal::platform::Host,
-    pub output_device: Option<cpal::platform::Device>,
-    pub input_device: Option<cpal::platform::Device>,
-    pub output_config: Option<cpal::StreamConfig>,
-    pub input_config: Option<cpal::StreamConfig>,
+pub struct InputDevice {
+    pub device: Device,
+    pub config: cpal::StreamConfig,
+}
+pub struct OutputDevice {
+    pub device: Device,
+    pub config: cpal::StreamConfig,
 }
 
-impl Default for SystemSettings {
-    fn default() -> Self {
-        let output_device = cpal::default_host().default_output_device();
-        let input_device = cpal::default_host().default_input_device();
-        let output_config = match output_device {
-            Some(v) => {
-                match v.default_output_config() {
-                    Ok(x) => Some(x.into()),
-                    Err(_) => None
-                }
-            },
-            None => None
+pub struct SystemSettings {
+    pub host: Host,
+    pub input_device: Option<InputDevice>,
+    pub output_device: Option<OutputDevice>,
+}
+
+const TIMEOUT_DURATION: Duration = Duration::from_secs(60);
+pub const SAMPLE_FORMAT: SampleFormat = SampleFormat::I16;
+pub type SampleFormatType = i16;
+
+impl SystemSettings {
+    pub fn try_default() -> Result<Self> {
+        let host = cpal::default_host();
+        let input_device = host.default_input_device();
+        let output_device = host.default_output_device();
+        Self::new(host, input_device, output_device)
+    }
+
+    pub fn new(host: Host, input: Option<Device>, output: Option<Device>) -> Result<Self> {
+        let input_device = if let Some(device) = input {
+            let config = device.supported_input_configs()?.find(|c| c.sample_format() == SAMPLE_FORMAT);
+            config.map(|config| InputDevice{config: config.with_max_sample_rate().into(), device })
+        } else {
+            None
         };
-        let input_config = match input_device {
-            Some(v) => {
-                match v.default_input_config() {
-                    Ok(x) => Some(x.into()),
-                    Err(_) => None
-                }
-            },
-            None => None
+        let output_device = if let Some(device) = output {
+            let config = device.supported_output_configs()?.find(|c| c.sample_format() == SAMPLE_FORMAT);
+            config.map(|config| OutputDevice{config: config.with_max_sample_rate().into(), device })
+        } else {
+            None
         };
-        Self {
-            host: cpal::default_host(),
-            output_device: cpal::default_host().default_output_device(),
-            input_device: cpal::default_host().default_input_device(),
-            output_config,
-            input_config,
-        }
+        Ok(Self {
+            host,
+            input_device,
+            output_device
+        })
     }
 }
 
 pub struct AudioBuffer {
     latency: f32,
     config: StreamConfig,
-    pub consumer: ringbuf::wrap::caching::Caching<std::sync::Arc<ringbuf::SharedRb<ringbuf::storage::Heap<f32>>>, false, true>,
-    pub producer: ringbuf::wrap::caching::Caching<std::sync::Arc<ringbuf::SharedRb<ringbuf::storage::Heap<f32>>>, true, false>,}
+    pub ring: Arc<HeapRb<SampleFormatType>>,
+    pub producer: Caching<Arc<HeapRb<SampleFormatType>>, true, false>,
+    pub consumer: Caching<Arc<HeapRb<SampleFormatType>>, false, true>,
+}
 
 impl AudioBuffer {
     pub fn new(latency: f32, config: StreamConfig) -> Self {
         let latency_frames = (latency / 1_000.0) * config.sample_rate as f32;
         let latency_samples = latency_frames as usize * config.channels as usize;
-        let ring = HeapRb::<f32>::new(latency_samples * 2); // stream buffer
-        let (mut producer, mut consumer) = ring.split();    // split buffer for input and output
+        let ring = Arc::new(HeapRb::<SampleFormatType>::new(latency_samples * 2)); // stream buffer
+        let (mut producer, mut consumer) = ring.clone().split();    // split buffer for input and output
         // fill buffer with silence
         for _ in 0..latency_samples {
-            producer.try_push(f32::EQUILIBRIUM).unwrap();
+            producer.try_push(SampleFormatType::EQUILIBRIUM).unwrap();
         }
         Self {
             latency,
             config,
-            consumer,
-            producer
+            ring,
+            producer,
+            consumer
         }
-
     }
-
 }
 
-pub(crate) fn receive_audio(sys: SystemSettings, mut consumer: impl Consumer<Item = f32> + Send + 'static) -> Option<Stream> { // TODO audio argument has to be audio stream / array of f32. Seperate functions for vc, screenshare and gui sounds?
+pub(crate) fn receive_audio(output: OutputDevice, mut consumer: impl Consumer<Item = SampleFormatType> + Send + 'static) -> Result<Stream, cpal::Error> {// TODO audio argument has to be audio stream / array of f32. Seperate functions for vc, screenshare and gui sounds?
     // feeding the streamed audio to the output
-    let output_data_fn = move |data: &mut [f32], _: &OutputCallbackInfo| {
+    let output_data_fn = move |data: &mut [SampleFormatType], _: &OutputCallbackInfo| {
         let read = consumer.pop_slice(data);
         if read < data.len() {
-            data[read..].fill(f32::EQUILIBRIUM); // insufficient streamed audio samples, replaced with silence
+            data[read..].fill(SampleFormatType::EQUILIBRIUM); // insufficient streamed audio samples, replaced with silence
         }
     };
-    let stream = match sys.output_device {
-        Some(v) => {
-            if sys.output_config.is_none() {
-                None
-            }
-            else {
-                match v.build_output_stream(sys.output_config.unwrap(), output_data_fn, err_fn, None) {
-                    Ok(x) => Some(x),
-                    Err(_) => None
-                }
-            }
-        },
-        None => None
-    }; // TODO run "stream.play()?" somewhere, probably either client or here
-    return stream;
+    output.device.build_output_stream(output.config, output_data_fn, err_fn, Some(TIMEOUT_DURATION))
 }
 
-pub(crate) fn capture_audio(sys: SystemSettings, mut producer: impl Producer<Item = f32> + Send + 'static) -> Option<Stream> {
+pub(crate) fn capture_audio(input: InputDevice, mut producer: impl Producer<Item = SampleFormatType> + Send + 'static) -> Result<Stream, cpal::Error> {
 
     // feeding the input audio into the stream buffer
-    let input_data_fn = move |data: &[f32], _: &InputCallbackInfo| {
+    let input_data_fn = move |data: &[SampleFormatType], _: &InputCallbackInfo| {
         if producer.push_slice(data) < data.len() {
             // input audio is filling the buffer, increase buffer or streaming speed
         }
     };
-    let stream = match sys.input_device {
-        Some(v) => {
-            if sys.input_config.is_none() {
-                None
-            }
-            else {
-                match v.build_input_stream(sys.input_config.unwrap(), input_data_fn, err_fn, None) {
-                    Ok(x) => Some(x),
-                    Err(e) => None,
-                }
-            }
-        },
-        None => None
-    }; // TODO run "stream.play()?" somewhere, probably either client or here
-    return stream;
+    input.device.build_input_stream(input.config, input_data_fn, err_fn, Some(TIMEOUT_DURATION))
 }
 
 // error handling
 fn err_fn(err: Error) {
     tracing::error!("{:?}", err);
-    todo!() // TODO how should errors be displayed for a user
+    // TODO how should errors be displayed for a user
 }

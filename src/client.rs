@@ -18,6 +18,7 @@
 use crate::common::{self};
 use anyhow::Result;
 use clap::Parser;
+use systemaudio::SystemSettings;
 use std::{fmt::Debug, path::PathBuf};
 
 pub mod connection;
@@ -50,32 +51,25 @@ fn gui(_args: ClientArguments) -> Result<()> {
 
 fn audio_feedback_test() -> Result<()> {
     // for testing audio input and output, TODO could be used for user settings
-    let settings = systemaudio::SystemSettings::default();
+    let settings = systemaudio::SystemSettings::try_default()?;
     //if default audio device works, monitor mic
-    if let Some(v) = settings.output_config {
-        tracing::info!("{:#?}", v);
-        tracing::info!("{:#?}", settings.input_config);
-        tracing::info!("{:?}", settings.output_device.unwrap().id()?);
-        tracing::info!("{:?}", settings.input_device.unwrap().id()?);
-        let audio_buffer: systemaudio::AudioBuffer = systemaudio::AudioBuffer::new(150.0, v);
-        let input_stream = systemaudio::capture_audio(Default::default(), audio_buffer.producer);
-        let output_stream = systemaudio::receive_audio(Default::default(), audio_buffer.consumer);
-        if let Some(input_stream) = input_stream {
-            match input_stream.play() {
-                Ok(_) => tracing::info!("audio input stream started"),
-                Err(e) => tracing::warn!("audio input stream not started: {:?}", e),
-            }
-        } else {
-            tracing::warn!("No input audio")
+    if let SystemSettings { input_device: Some(input), output_device: Some(output), ..} = settings {
+        tracing::info!("{:#?}", input.config);
+        tracing::info!("{:#?}", output.config);
+        tracing::info!("{:?}", output.device.id()?);
+        tracing::info!("{:?}", input.device.id()?);
+        let audio_buffer: systemaudio::AudioBuffer = systemaudio::AudioBuffer::new(150.0, input.config);
+        let input_stream = systemaudio::capture_audio(input, audio_buffer.producer)?;
+        let output_stream = systemaudio::receive_audio(output, audio_buffer.consumer)?;
+        match input_stream.play() {
+            Ok(_) => tracing::info!("audio input stream started"),
+            Err(e) => tracing::warn!("audio input stream not started: {:?}", e),
         }
-        if let Some(output_stream) = output_stream {
-            match output_stream.play() {
-                Ok(_) => tracing::info!("audio output stream started"),
-                Err(e) => tracing::warn!("audio output stream not started: {:?}", e),
-            }
-        } else {
-            tracing::warn!("No output audio");
+        match output_stream.play() {
+            Ok(_) => tracing::info!("audio output stream started"),
+            Err(e) => tracing::warn!("audio output stream not started: {:?}", e),
         }
+        std::thread::sleep(std::time::Duration::from_secs(10));
     } else {
         tracing::warn!("Default Config not found");
     }

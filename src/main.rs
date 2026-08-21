@@ -1,5 +1,3 @@
-#![allow(unused)] // nocheckin
-
 /* TODO author, description
  * Speakrs - A communication client / server program
  * Copyright (C) 2026  Miranda Große-Heilmann

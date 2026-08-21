@@ -91,7 +91,7 @@ pub struct ServerInfoData {
 
 pub type UserKey = UuidKey<UserData>;
 pub type ChannelKey = UuidKey<ChannelData>;
-// pub type MessageKey = UuidKey<MessageData>;
+// pub type MessageKey = UuidKey<MessageData>; // TODO: maybe remove commented line
 pub type MessageKey = PrefixedKey<ChannelKey, MessageData>;
 
 pub type UsersTable = SerdeTree<UserData>;

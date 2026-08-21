@@ -283,7 +283,7 @@ impl Connection {
 
     /// Add a channel with `channel` data, returning the ChannelKey of the added channel.
     pub async fn add_channel(&self, channel: ChannelData) -> Result<ChannelKey> {
-        let (client, db, (_, token)) = self.with_active_guard("'download all messages'")?;
+        let (client, db, (_, token)) = self.with_active_guard("'add channel'")?;
         let key = client
             .create_channel(tarpc::context::current(), token, channel.clone())
             .instrument(info_span!("Creating channel in server"))

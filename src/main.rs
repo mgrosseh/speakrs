@@ -1,3 +1,5 @@
+#![allow(unused)] // nocheckin
+
 /* TODO author, description
  * Speakrs - A communication client / server program
  * Copyright (C) 2026  Miranda Große-Heilmann
@@ -15,8 +17,8 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
-mod common;
 mod client;
+mod common;
 mod server;
 
 use clap::Parser;
@@ -25,7 +27,7 @@ use crate::common::Arguments;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args =  Arguments::parse();
+    let args = Arguments::parse();
 
     // TODO: make sure files dont get tooo big
     let log_directory = common::config_home().join("logs");
@@ -38,16 +40,10 @@ async fn main() -> anyhow::Result<()> {
     } else {
         tracing_appender::non_blocking(tracing_appender::rolling::never(log_directory, log_file))
     };
-    tracing_subscriber::fmt()
-        .with_writer(non_blocking)
-        .init();
+    tracing_subscriber::fmt().with_writer(non_blocking).init();
 
     match args.command {
-        common::Commands::Client(args) => {
-            client::run(args).await
-        }
-        common::Commands::Server(args) => {
-            server::run(args).await
-        }
+        common::Commands::Client(args) => client::run(args).await,
+        common::Commands::Server(args) => server::run(args).await,
     }
 }

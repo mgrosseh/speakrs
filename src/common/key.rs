@@ -1,3 +1,4 @@
+pub mod compound;
 pub mod generator;
 pub mod integer;
 pub mod prefixed;
@@ -9,14 +10,29 @@ pub use singleton::SingletonKey;
 use sled::IVec;
 pub use uuid::{UuidKey, UuidNowKeygen};
 
-pub trait KeyPrefix<K> {
-    /// Convert this KeyPrefix to a sled prefix
-    fn to_prefix(self) -> IVec;
+// pub trait KeyPrefix<K> {
+//     /// Convert this KeyPrefix to a sled prefix
+//     fn to_prefix(self) -> IVec;
+// }
+
+// impl<T, X> KeyPrefix<PrefixedKey<UuidKey<T>, X>> for UuidKey<T> {
+//     fn to_prefix(self) -> IVec {
+//         IVec::from(self)
+//     }
+// }
+
+pub trait Prefixed<P> {
+    fn prefix(&self) -> P;
+    // fn prefix_to_ivec(prefix: P) -> IVec;
 }
 
-impl<T, X> KeyPrefix<PrefixedKey<UuidKey<T>, X>> for UuidKey<T> {
-    fn to_prefix(self) -> IVec {
-        IVec::from(self)
+impl<P, X> Prefixed<UuidKey<P>> for PrefixedKey<UuidKey<P>, X> {
+    // fn prefix_to_ivec(prefix: UuidKey<P>) -> IVec {
+    //     IVec::from(prefix)
+    // }
+
+    fn prefix(&self) -> UuidKey<P> {
+        self.prefix()
     }
 }
 

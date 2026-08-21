@@ -2,9 +2,12 @@ pub mod insertable;
 pub mod iter;
 pub mod subscriber;
 
-use crate::common::{key::generator::KeyGenerator, tree::insertable::DbInsertable};
+use crate::common::{
+    key::{Prefixed, generator::KeyGenerator},
+    tree::insertable::DbInsertable,
+};
 
-use super::{codec::DbValueCodec, key::KeyPrefix};
+use super::codec::DbValueCodec;
 // use anyhow::Result;
 use iter::DBIter;
 use sled::{
@@ -323,11 +326,12 @@ where
     #[allow(unused)]
     pub fn watch_partial<P>(&self, part: P) -> DBSubscriber<K, V, Codec, KeyGen>
     where
-        P: KeyPrefix<K>,
+        K: Prefixed<P>,
+        P: Into<IVec>,
     {
         DBSubscriber {
             tree: DBTree::from_raw(self.inner.clone()),
-            inner: self.inner.watch_prefix(part.to_prefix()),
+            inner: self.inner.watch_prefix(part.into()),
         }
     }
 }

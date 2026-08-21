@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::common::{
     key::{PrefixedKey, PrefixedKeygen, UuidKey},
-    table::{SerdeSingleton, SerdeTree, TableDecl},
+    table::{OneToMany, SerdeSingleton, SerdeTree, TableDecl},
 };
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -82,7 +82,8 @@ impl MessageData {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ServerInfoData { // TODO: better name
+pub struct ServerInfoData {
+    // TODO: better name
     /// Host system unique name
     pub name: String,
     pub uuid: Uuid,
@@ -90,6 +91,7 @@ pub struct ServerInfoData { // TODO: better name
 
 pub type UserKey = UuidKey<UserData>;
 pub type ChannelKey = UuidKey<ChannelData>;
+// pub type MessageKey = UuidKey<MessageData>;
 pub type MessageKey = PrefixedKey<ChannelKey, MessageData>;
 
 pub type UsersTable = SerdeTree<UserData>;
@@ -100,6 +102,10 @@ pub const CHANNELS_TABLE: TableDecl<ChannelsTable> = ChannelsTable::decl("channe
 
 pub type MessagesTable = SerdeTree<MessageData, MessageKey, PrefixedKeygen<ChannelKey>>;
 pub const MESSAGES_TABLE: TableDecl<MessagesTable> = MessagesTable::decl("messages");
+
+pub type MessagesInChannelTable = OneToMany<ChannelKey, MessageKey>;
+pub const MESSAGES_IN_CHANNEL_TABLE: TableDecl<MessagesInChannelTable> =
+    MessagesInChannelTable::decl("messages_in_channel");
 
 pub type ServerDataTable = SerdeSingleton<ServerInfoData>;
 pub const SERVER_DATA_TABLE: TableDecl<ServerDataTable> = ServerDataTable::decl("server_data");

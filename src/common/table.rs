@@ -1,6 +1,6 @@
 use crate::common::{
-    codec::SerdeJsonCodec,
-    key::{SingletonKey, UuidKey, UuidNowKeygen},
+    codec::{PodCodec, SerdeJsonCodec},
+    key::{PrefixedKey, SingletonKey, UuidKey, UuidNowKeygen, compound::CompoundKey},
     tree::DBTree,
 };
 use std::marker::PhantomData;
@@ -33,6 +33,9 @@ impl<V, K, Codec, Gen> DBTree<V, K, Codec, Gen> {
         TableDecl(tree_name, PhantomData)
     }
 }
+
+pub type OneToMany<OneKey, ManyKey, RelationshipData = (), Codec = PodCodec> =
+    DBTree<CompoundKey<(OneKey, ManyKey)>, RelationshipData, Codec>;
 
 pub type SerdeTree<T, K = UuidKey<T>, Gen = UuidNowKeygen> = DBTree<K, T, SerdeJsonCodec, Gen>;
 pub type SerdeSingleton<T> = DBTree<SingletonKey, T, SerdeJsonCodec>;

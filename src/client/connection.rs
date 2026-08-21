@@ -6,7 +6,10 @@ use crate::common::{
 };
 use anyhow::{Context, Result};
 use std::{
-    fmt::Debug, fs::File, path::Path, sync::{OnceLock, RwLock}
+    fmt::Debug,
+    fs::File,
+    path::Path,
+    sync::{OnceLock, RwLock},
 };
 use tarpc::tokio_serde::formats::Json;
 use tokio::net::ToSocketAddrs;
@@ -85,9 +88,7 @@ impl Connection {
                 panic!("Connection: calling session() on Empty, always call is_registered() first.")
             }
             Self::Unregistered(_) => {
-                panic!(
-                    "Connection: calling session() on Unregistered, always call is_registered() first."
-                )
+                panic!("Connection: calling session() on Unregistered, always call .() first.")
             }
             Self::Active(connection) => &connection.client_session,
         }
@@ -283,7 +284,7 @@ impl Connection {
 
     /// Add a channel with `channel` data, returning the ChannelKey of the added channel.
     pub async fn add_channel(&self, channel: ChannelData) -> Result<ChannelKey> {
-        let (client, db, (_, token)) = self.with_active_guard("'add channel'")?;
+        let (client, db, (_, token)) = self.with_active_guard("'download all messages'")?;
         let key = client
             .create_channel(tarpc::context::current(), token, channel.clone())
             .instrument(info_span!("Creating channel in server"))
@@ -329,8 +330,61 @@ impl Connection {
     }
 
     #[allow(unused)]
-    pub async fn message_view_paged(&self, _channel: ChannelKey, page: usize) -> Result<()> {
+    pub async fn message_view_paged(&self, pagination: Pagination<MessageKey>) -> Result<()> {
         todo!() // TODO
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Pagination<Cursor> {
+    before: Option<Cursor>,
+    after: Option<Cursor>,
+    limit: PaginationLimit,
+}
+
+impl<Cursor> Default for Pagination<Cursor> {
+    fn default() -> Self {
+        Self {
+            before: None,
+            after: None,
+            limit: Default::default(),
+        }
+    }
+}
+
+impl<Cursor> Pagination<Cursor> {
+    fn limit(limit: PaginationLimit) -> Self {
+        Self {
+            before: None,
+            after: None,
+            limit,
+        }
+    }
+
+    fn before(self, before: Cursor) -> Self {
+        Self {
+            before: Some(before),
+            ..self
+        }
+    }
+
+    fn after(self, after: Cursor) -> Self {
+        Self {
+            after: Some(after),
+            ..self
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PaginationLimit {
+    First(usize),
+    Last(usize),
+}
+
+impl Default for PaginationLimit {
+    fn default() -> Self {
+        PaginationLimit::First(10)
     }
 }
 
@@ -343,7 +397,6 @@ pub fn current_connection() -> &'static RwLock<Connection> {
 pub fn clone_current_connection() -> Connection {
     current_connection().read().unwrap().clone()
 }
-
 
 // TODO: utilize
 // let last_known_message = db

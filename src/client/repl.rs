@@ -449,7 +449,7 @@ fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
             }
             x.unwrap().join("\n")
         };
-        let data = MessageData::now(user, content);
+        let data = MessageData::now(user, channel_key, content);
 
         let key = connection.send_message(channel_key, data.clone()).await?;
 

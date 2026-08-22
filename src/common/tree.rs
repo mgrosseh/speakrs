@@ -3,7 +3,10 @@ pub mod iter;
 pub mod subscriber;
 
 use crate::common::{
-    key::{Prefixed, generator::KeyGenerator},
+    key::{
+        Prefixed,
+        generator::{DefaultContext, KeyGenerator},
+    },
     tree::insertable::DbInsertable,
 };
 
@@ -23,6 +26,12 @@ use tarpc::client::RpcError;
 
 /// A "placeholder" key generator type that indicates no automatic key generation, i.e. key must always be explicitly provided.
 pub struct KeyMustBeProvided;
+
+impl KeyGenerator for KeyMustBeProvided {
+    fn construct(_context: DefaultContext, _tree: &TransactionalTree) -> Self {
+        KeyMustBeProvided
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum TreeError<EncodeError, DecodeError> {
@@ -342,8 +351,14 @@ mod test {
 
     use crate::common::{
         codec::PodCodec,
-        key::integer::{IntegerKey, MonotonicKeygen},
-        schema::{ChannelKey, MESSAGES_TABLE, MessageData, MessageKey, UserData, UserKey},
+        key::{
+            compound::ConsKey,
+            integer::{IntegerKey, MonotonicKeygen},
+        },
+        schema::{
+            ChannelKey, MESSAGES_IN_CHANNEL_TABLE, MESSAGES_TABLE, MessageData, MessageKey,
+            UserData, UserKey,
+        },
         table::SerdeTree,
     };
 
@@ -360,7 +375,7 @@ mod test {
         let tree = decl.open(&db)?;
         let subscriber = tree.watch_all();
 
-        let _thread = std::thread::spawn(move || {
+        let thread = std::thread::spawn(move || {
             let tree = decl.open(&db).expect("open");
             tree.insert(UserData::new("TestUser1".to_owned()))
         });
@@ -373,38 +388,48 @@ mod test {
             }
         }
 
+        thread.join().unwrap()?;
         Ok(())
     }
 
     #[test]
     fn test_watch_partial() -> anyhow::Result<()> {
         let db = mock_db();
-        let tree = MESSAGES_TABLE.open(&db).expect("open");
+        let tree = MESSAGES_TABLE.open(&db)?;
+        let relationship = MESSAGES_IN_CHANNEL_TABLE.open(&db)?;
 
         let channel = ChannelKey::new_now();
-        let message = MessageKey::new_now(channel);
+        let message = MessageKey::new_now();
 
-        let subscriber = tree.watch_partial(channel);
+        let subscriber = relationship.watch_partial(ConsKey::of(channel));
 
-        let _thread = std::thread::spawn(move || {
-            let tree = MESSAGES_TABLE.open(&db).expect("open");
+        let thread = std::thread::spawn(move || {
+            let tree = MESSAGES_TABLE.open(&db)?;
+            let relationship = MESSAGES_IN_CHANNEL_TABLE.open(&db)?;
             tree.set(
                 message,
-                MessageData::now(UserKey::new_now(), "testing".to_owned()),
-            )
+                MessageData::now(UserKey::new_now(), channel, "testing".to_owned()),
+            )?;
+            relationship.set(ConsKey::new((channel, message)), ())?;
+            Ok::<_, anyhow::Error>(())
         });
 
         for event in subscriber.take(1) {
             match event {
                 Ok(DBEvent::Insert { value, key }) => {
-                    assert_eq!(value.content.as_str(), "testing");
-                    assert_eq!(key, message);
+                    assert_eq!(value, ());
+                    assert_eq!(key, ConsKey::new((channel, message)));
+                    assert_eq!(
+                        tree.get(message)?.map(|msg| msg.content),
+                        Some("testing".to_owned())
+                    )
                 }
                 Ok(DBEvent::Remove { .. }) => panic!("No remove should have been called!"),
                 Err(e) => return Err(e),
             }
         }
 
+        thread.join().unwrap()?;
         Ok(())
     }
 

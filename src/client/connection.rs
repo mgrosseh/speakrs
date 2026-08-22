@@ -1,6 +1,8 @@
 use crate::common::{
     auth::SessionToken,
     database::DB,
+    key::compound::ConsKey,
+    pagination::Pagination,
     rpc::RpcServiceClient,
     schema::{ChannelData, ChannelKey, MessageData, MessageKey, UserData, UserKey},
 };
@@ -277,8 +279,9 @@ impl Connection {
             .instrument(info_span!("Creating message in server"))
             .await?
             .context("Error while talking to server")?;
-
         db.messages()?.set(key, message)?;
+        db.messages_in_channel()?
+            .set(ConsKey::new((channel_key, key)), ())?;
         Ok(key)
     }
 
@@ -330,61 +333,12 @@ impl Connection {
     }
 
     #[allow(unused)]
-    pub async fn message_view_paged(&self, pagination: Pagination<MessageKey>) -> Result<()> {
-        todo!() // TODO
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct Pagination<Cursor> {
-    before: Option<Cursor>,
-    after: Option<Cursor>,
-    limit: PaginationLimit,
-}
-
-impl<Cursor> Default for Pagination<Cursor> {
-    fn default() -> Self {
-        Self {
-            before: None,
-            after: None,
-            limit: Default::default(),
-        }
-    }
-}
-
-impl<Cursor> Pagination<Cursor> {
-    fn limit(limit: PaginationLimit) -> Self {
-        Self {
-            before: None,
-            after: None,
-            limit,
-        }
-    }
-
-    fn before(self, before: Cursor) -> Self {
-        Self {
-            before: Some(before),
-            ..self
-        }
-    }
-
-    fn after(self, after: Cursor) -> Self {
-        Self {
-            after: Some(after),
-            ..self
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum PaginationLimit {
-    First(usize),
-    Last(usize),
-}
-
-impl Default for PaginationLimit {
-    fn default() -> Self {
-        PaginationLimit::First(10)
+    pub async fn channel_messages(
+        &self,
+        channel_key: ChannelKey,
+        pagination: Pagination<MessageKey>,
+    ) -> Result<()> {
+        todo!() // TODOa
     }
 }
 

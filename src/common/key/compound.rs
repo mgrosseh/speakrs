@@ -1,19 +1,21 @@
-use std::{collections::btree_map::IntoKeys, fmt::Display, marker::PhantomData};
+use std::fmt::Display;
 
+use bytemuck::{AnyBitPattern, Pod, Zeroable};
 use sled::IVec;
 
 use crate::common::key::Prefixed;
 
-pub type CompoundKey<Keys> = ConsKey<<Keys as IntoKeysList>::List>;
+pub type CompoundKey<Keys> = ConsKey<<Keys as IntoKeyList>::List>;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
+#[repr(transparent)]
 pub struct ConsKey<Keys> {
     keys: Keys,
 }
 
 impl<PrefixKeys, Keys> Prefixed<ConsKey<PrefixKeys>> for ConsKey<Keys>
 where
-    Keys: HListSplit<PrefixKeys> + Clone,
+    Keys: KeyListSplit<PrefixKeys> + Clone,
 {
     fn prefix(&self) -> ConsKey<PrefixKeys> {
         ConsKey {
@@ -23,18 +25,45 @@ where
 }
 
 impl<Keys> ConsKey<Keys> {
-    fn new(keys: impl IntoKeysList<List = Keys>) -> Self {
+    pub fn new(keys: impl IntoKeyList<List = Keys>) -> Self {
         Self {
             keys: keys.into_list(),
         }
     }
 }
 
-impl<Head> ConsKey<HCons<Head, HNil>> {
-    fn of(head: Head) -> Self {
+impl<Head> ConsKey<KCons<Head, KNil>> {
+    pub fn of(head: Head) -> Self {
         Self {
-            keys: HNil.cons(head),
+            keys: KNil.cons(head),
         }
+    }
+}
+
+impl<Keys> AsRef<[u8]> for ConsKey<Keys>
+where
+    Keys: Pod,
+{
+    fn as_ref(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+}
+
+impl<Keys> From<ConsKey<Keys>> for IVec
+where
+    Keys: Pod,
+{
+    fn from(value: ConsKey<Keys>) -> Self {
+        value.as_ref().into()
+    }
+}
+
+impl<Keys> From<IVec> for ConsKey<Keys>
+where
+    Self: AnyBitPattern,
+{
+    fn from(value: IVec) -> Self {
+        bytemuck::pod_read_unaligned(value.as_ref())
     }
 }
 
@@ -61,7 +90,7 @@ where
 
 struct FoldDisplay<'a, 'fmt>(&'a mut std::fmt::Formatter<'fmt>);
 
-impl<'a, 'fmt, Head> HListFold<std::fmt::Result, Head> for FoldDisplay<'a, 'fmt>
+impl<'a, 'fmt, Head> KeyListFold<std::fmt::Result, Head> for FoldDisplay<'a, 'fmt>
 where
     Head: std::fmt::Display,
 {
@@ -74,26 +103,26 @@ where
     }
 }
 
-impl<'a, 'fmt, Head> HListFold<(), Head> for FoldDisplay<'a, 'fmt>
+impl<'a, 'fmt, Head> KeyListFold<(), Head> for FoldDisplay<'a, 'fmt>
 where
     Head: std::fmt::Display,
 {
     type Output = std::fmt::Result;
 
-    fn fold_impl(&mut self, res: (), head: Head) -> Self::Output {
+    fn fold_impl(&mut self, _res: (), head: Head) -> Self::Output {
         head.fmt(self.0)
     }
 }
 
-pub trait IntoKeysList {
-    type List: HList;
+pub trait IntoKeyList {
+    type List: KeyList;
     fn into_list(self) -> Self::List;
 }
 
 macro_rules! impl_into_keys {
     ($head:ident $($tail:ident)*) => {
-        impl<$head, $($tail,)*> IntoKeysList for ($head, $($tail,)*) where ($($tail,)*): IntoKeysList {
-            type List = HCons<$head, <($($tail,)*) as IntoKeysList>::List>;
+        impl<$head, $($tail,)*> IntoKeyList for ($head, $($tail,)*) where ($($tail,)*): IntoKeyList {
+            type List = KCons<$head, <($($tail,)*) as IntoKeyList>::List>;
 
             fn into_list(self) -> Self::List {
                 #[allow(non_snake_case)]
@@ -101,66 +130,67 @@ macro_rules! impl_into_keys {
                 ($($tail,)*).into_list().cons($head)
             }
         }
-
         impl_into_keys!($($tail)*);
     };
     () => {};
 }
 
-impl IntoKeysList for () {
-    type List = HNil;
+impl IntoKeyList for () {
+    type List = KNil;
 
     fn into_list(self) -> Self::List {
-        HNil
+        KNil
     }
 }
 
 impl_into_keys!(A B C D E F G H I J);
 
-pub trait HList
+pub trait KeyList
 where
     Self: Sized,
 {
-    fn cons<Head>(self, head: Head) -> HCons<Head, Self> {
-        HCons(head, self)
+    fn cons<Head>(self, head: Head) -> KCons<Head, Self> {
+        KCons(head, self)
     }
 }
 
-trait HListFold<Start, Head> {
+trait KeyListFold<Start, Head> {
     type Output;
     fn fold_impl(&mut self, acc: Start, head: Head) -> Self::Output;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HNil;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroable, Pod)]
+#[repr(transparent)]
+pub struct KNil;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HCons<Head, Tail>(Head, Tail);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroable, Pod)]
+#[repr(C, packed)]
+pub struct KCons<Head, Tail>(Head, Tail);
 
-impl HList for HNil {}
-impl<Head, Tail> HList for HCons<Head, Tail> {}
+impl KeyList for KNil {}
+impl<Head, Tail> KeyList for KCons<Head, Tail> {}
 
-trait HListSplit<Left> {
+trait KeyListSplit<Left> {
     type Right;
     fn split(self) -> (Left, Self::Right);
 }
 
-impl<Head, Tail> HListSplit<HNil> for HCons<Head, Tail> {
+impl<Head, Tail> KeyListSplit<KNil> for KCons<Head, Tail> {
     type Right = Self;
 
-    fn split(self) -> (HNil, Self::Right) {
-        (HNil, self)
+    fn split(self) -> (KNil, Self::Right) {
+        (KNil, self)
     }
 }
 
-impl<Head, Rest, Tail> HListSplit<HCons<Head, Rest>> for HCons<Head, Tail>
+impl<Head, Rest, Tail> KeyListSplit<KCons<Head, Rest>> for KCons<Head, Tail>
 where
-    Tail: HListSplit<Rest>,
-    Rest: HList,
+    Tail: KeyListSplit<Rest>,
+    Rest: KeyList,
 {
     type Right = Tail::Right;
 
-    fn split(self) -> (HCons<Head, Rest>, Self::Right) {
+    fn split(self) -> (KCons<Head, Rest>, Self::Right) {
         let (left, right) = self.1.split();
         (left.cons(self.0), right)
     }
@@ -171,10 +201,10 @@ trait FoldableList<Start, F> {
     fn fold(self, start: Start, f: F) -> Self::Output;
 }
 
-impl<Head, Tail, Start, F> FoldableList<Start, F> for HCons<Head, Tail>
+impl<Head, Tail, Start, F> FoldableList<Start, F> for KCons<Head, Tail>
 where
     Tail: FoldableList<F::Output, F>,
-    F: HListFold<Start, Head>,
+    F: KeyListFold<Start, Head>,
 {
     type Output = Tail::Output;
     fn fold(self, start: Start, mut f: F) -> Tail::Output {
@@ -182,9 +212,9 @@ where
     }
 }
 
-impl<Start, F> FoldableList<Start, F> for HNil {
+impl<Start, F> FoldableList<Start, F> for KNil {
     type Output = Start;
-    fn fold(self, start: Start, f: F) -> Start {
+    fn fold(self, start: Start, _f: F) -> Start {
         start
     }
 }

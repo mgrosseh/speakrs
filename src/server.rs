@@ -1,5 +1,7 @@
 use std::{
-    fs::File, net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr}, path::PathBuf
+    fs::File,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    path::PathBuf,
 };
 
 use auth::{Permissions, authenticate_session, permission_guard, register_user};
@@ -16,6 +18,7 @@ use crate::common::{
     audio::AudioPacket,
     auth::SessionToken,
     database::DB,
+    key::compound::ConsKey,
     rpc::{RpcService, ServiceResult},
     schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerInfoData, UserData, UserKey},
 };
@@ -49,7 +52,7 @@ pub(crate) struct ServerArguments {
     ipv6: bool,
     /// Dump the database to file
     #[clap(long)]
-    dump_db_to: Option<String>
+    dump_db_to: Option<String>,
 }
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
@@ -175,10 +178,12 @@ impl common::rpc::RpcService for HelloServer {
             session,
             &[Permissions::CanWriteMessageIn(channel)],
         )?;
-        self.db
-            .messages()?
-            .insert_in_context(channel, data)
-            .map_err(|e| e.into())
+        let messages = self.db.messages()?;
+        let relationship = self.db.messages_in_channel()?;
+
+        let message_id = messages.insert(data)?;
+        relationship.set(ConsKey::new((channel, message_id)), ())?;
+        Ok(message_id)
     }
     async fn get_message(
         self,
@@ -186,12 +191,15 @@ impl common::rpc::RpcService for HelloServer {
         session: SessionToken,
         key: MessageKey,
     ) -> ServiceResult<Option<MessageData>> {
-        permission_guard(
-            self.db.clone(),
-            session,
-            &[Permissions::CanReadMessageIn(key.prefix())],
-        )?;
-        self.db.messages()?.get(key).map_err(|e| e.into())
+        let message = self.db.messages()?.get(key)?;
+        if let Some(MessageData { channel, .. }) = message {
+            permission_guard(
+                self.db.clone(),
+                session,
+                &[Permissions::CanReadMessageIn(channel)],
+            )?;
+        }
+        Ok(message)
     }
 
     async fn get_user_info(
@@ -260,7 +268,10 @@ async fn command_server(args: ServerArguments, server: DB) -> anyhow::Result<()>
     } else {
         (IpAddr::V4(Ipv4Addr::UNSPECIFIED), args.port)
     };
-    info!("Serving under addr {} on port {}", server_addr.0, server_addr.1);
+    info!(
+        "Serving under addr {} on port {}",
+        server_addr.0, server_addr.1
+    );
     let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Json::default).await?;
     tracing::info!("Listening on port {}", listener.local_addr().port());
     listener.config_mut().max_frame_length(usize::MAX);

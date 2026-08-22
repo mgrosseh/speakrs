@@ -1,3 +1,4 @@
+use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
 use sled::{IVec, transaction::TransactionalTree};
 use std::marker::PhantomData;
@@ -7,10 +8,21 @@ use crate::common::key::generator::{DefaultContext, GenerateKey, KeyGenerator};
 
 #[derive(Serialize, Deserialize)]
 #[serde(transparent)]
+#[repr(transparent)]
 pub struct UuidKey<T> {
     pub(super) uid: Uuid,
     id_type: PhantomData<T>,
 }
+
+// Safety:
+// This is a repr(transparent) struct where type parameter is only phantom data bound.
+// As long as the inner member type ([`Uuid`]) implements respective trait, it is safe
+// to implement it for transparent wrapper as well. The added `where` bounds verify that
+// invariant and should prevent the code from compiling if it's ever broken.
+
+unsafe impl<T> Zeroable for UuidKey<T> where Uuid: Zeroable {}
+// TODO: This 'static bound technically shouldn't be necessary, since T is not part of struct, but idk how to get around it.
+unsafe impl<T: 'static> Pod for UuidKey<T> where Uuid: Pod {}
 
 impl<T> std::fmt::Display for UuidKey<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -1,6 +1,6 @@
 use crate::common::{
     codec::{PodCodec, SerdeJsonCodec},
-    key::{PrefixedKey, SingletonKey, UuidKey, UuidNowKeygen, compound::CompoundKey},
+    key::{SingletonKey, UuidKey, UuidNowKeygen, compound::CompoundKey},
     tree::DBTree,
 };
 use std::marker::PhantomData;

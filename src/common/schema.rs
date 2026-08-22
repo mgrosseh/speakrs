@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::common::{
-    key::{PrefixedKey, PrefixedKeygen, UuidKey},
+    key::UuidKey,
     table::{OneToMany, SerdeSingleton, SerdeTree, TableDecl},
 };
 
@@ -64,19 +64,26 @@ pub struct MessageData {
     pub timestamp: DateTime<Utc>,
     pub author: UserKey,
     pub content: String,
+    pub channel: ChannelKey,
 }
 impl MessageData {
     /// Create MessageData with timestamp now
     #[allow(unused)] // TODO
-    pub fn now(author: UserKey, content: String) -> Self {
-        Self::new(Utc::now(), author, content)
+    pub fn now(author: UserKey, channel: ChannelKey, content: String) -> Self {
+        Self::new(Utc::now(), channel, author, content)
     }
     #[allow(unused)] // TODO
-    pub fn new(timestamp: DateTime<Utc>, author: UserKey, content: String) -> Self {
+    pub fn new(
+        timestamp: DateTime<Utc>,
+        channel: ChannelKey,
+        author: UserKey,
+        content: String,
+    ) -> Self {
         Self {
             timestamp,
             author,
             content,
+            channel,
         }
     }
 }
@@ -91,8 +98,7 @@ pub struct ServerInfoData {
 
 pub type UserKey = UuidKey<UserData>;
 pub type ChannelKey = UuidKey<ChannelData>;
-// pub type MessageKey = UuidKey<MessageData>; // TODO: maybe remove commented line
-pub type MessageKey = PrefixedKey<ChannelKey, MessageData>;
+pub type MessageKey = UuidKey<MessageData>;
 
 pub type UsersTable = SerdeTree<UserData>;
 pub const USERS_TABLE: TableDecl<UsersTable> = UsersTable::decl("users");
@@ -100,7 +106,7 @@ pub const USERS_TABLE: TableDecl<UsersTable> = UsersTable::decl("users");
 pub type ChannelsTable = SerdeTree<ChannelData>;
 pub const CHANNELS_TABLE: TableDecl<ChannelsTable> = ChannelsTable::decl("channels");
 
-pub type MessagesTable = SerdeTree<MessageData, MessageKey, PrefixedKeygen<ChannelKey>>;
+pub type MessagesTable = SerdeTree<MessageData, MessageKey>;
 pub const MESSAGES_TABLE: TableDecl<MessagesTable> = MessagesTable::decl("messages");
 
 pub type MessagesInChannelTable = OneToMany<ChannelKey, MessageKey>;

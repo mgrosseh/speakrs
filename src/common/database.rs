@@ -89,6 +89,11 @@ impl DB {
     pub fn messages(&self) -> OpenResult<MessagesTable> {
         MESSAGES_TABLE.open(&self.db)
     }
+
+    pub fn messages_in_channel(&self) -> OpenResult<MessagesInChannelTable> {
+        MESSAGES_IN_CHANNEL_TABLE.open(&self.db)
+    }
+
     /// Get DBTree of all Channels, allowing querying, and storing data.
     pub fn channels(&self) -> OpenResult<ChannelsTable> {
         CHANNELS_TABLE.open(&self.db)
@@ -124,7 +129,12 @@ impl DB {
             users.insert(key, value);
         }
 
-        Ok(DBCommonDump { server_info, messages, channels, users })
+        Ok(DBCommonDump {
+            server_info,
+            messages,
+            channels,
+            users,
+        })
     }
 }
 
@@ -140,6 +150,8 @@ pub struct DBCommonDump {
 mod test {
     use std::array;
 
+    use crate::common::key::compound::ConsKey;
+
     use super::*;
     use anyhow::{Context, Result};
 
@@ -150,24 +162,26 @@ mod test {
     fn test_read_messages() -> Result<()> {
         let server = DB::mock();
         let user_key = UserKey::new_now();
-        let mock_messages: [_; 50] =
-            array::from_fn(|i| MessageData::now(user_key, format!("some test message {i}")));
-
         let channel_key = ChannelKey::new_now();
-        server
-            .messages()?
-            .insert_in_context(channel_key, mock_messages)?;
+        let mock_messages: [_; 50] = array::from_fn(|i| {
+            MessageData::now(user_key, channel_key, format!("some test message {i}"))
+        });
 
-        let another_key = MessageKey::new_now(channel_key);
+        let message_keys = server.messages()?.insert(mock_messages)?;
+        server
+            .messages_in_channel()?
+            .insert(message_keys.map(|msg| (ConsKey::new((channel_key, msg)), ())))?;
+
+        let another_key = MessageKey::new_now();
         server.messages()?.set(
             another_key,
-            MessageData::now(user_key, format!("Another message")),
+            MessageData::now(user_key, channel_key, format!("Another message")),
         )?;
 
-        let another_key = MessageKey::new_now(channel_key);
+        let another_key = MessageKey::new_now();
         server.messages()?.set(
             another_key,
-            MessageData::now(user_key, format!("Another message")),
+            MessageData::now(user_key, channel_key, format!("Another message")),
         )?;
 
         let (key, _) = server
@@ -177,7 +191,10 @@ mod test {
         let messages = server.messages()?;
         for next in messages.range(key..).take(10) {
             let (_k, value) = next?;
-            println!("Found message: <{}>: {}", value.timestamp, value.content);
+            println!(
+                "Found message (channel {}): <{}>: {}",
+                value.channel, value.timestamp, value.content
+            );
         }
         Ok(())
     }
@@ -193,8 +210,8 @@ mod test {
         let channel1 = ChannelData::text("Channel 1".to_string(), "An example channel".to_string());
         server.channels()?.set(channel_key, channel1)?;
         println!("inserted channel1");
-        let message1 = MessageData::now(user_key, "Test Message 1".to_string());
-        let message_key = MessageKey::new_now(channel_key);
+        let message1 = MessageData::now(user_key, channel_key, "Test Message 1".to_string());
+        let message_key = MessageKey::new_now();
         server.messages()?.set(message_key, message1)?;
         println!("inserted message1");
 

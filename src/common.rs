@@ -37,6 +37,7 @@ pub mod auth;
 pub mod codec;
 pub mod database;
 pub mod key;
+pub mod pagination;
 pub mod rpc;
 pub mod schema;
 pub mod table;

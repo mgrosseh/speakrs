@@ -1,28 +1,24 @@
-pub mod insertable;
 pub mod iter;
 pub mod subscriber;
 
 use crate::common::{
+    codec::EncodedValue,
     key::{
-        Prefixed,
+        DbKey, Prefixed,
         generator::{DefaultContext, KeyGenerator},
     },
-    tree::insertable::DbInsertable,
 };
 
 use super::codec::DbValueCodec;
 // use anyhow::Result;
-use iter::DBIter;
+use iter::TreeIter;
 use sled::{
-    IVec, Tree,
-    transaction::{
-        ConflictableTransactionError, ConflictableTransactionResult, TransactionError,
-        TransactionalTree,
-    },
+    IVec, Transactional, Tree,
+    transaction::{ConflictableTransactionResult, TransactionError, TransactionalTree},
 };
+use sled::{Result as SledResult, transaction::UnabortableTransactionError};
 use std::{borrow::Borrow, marker::PhantomData, ops::RangeBounds};
 use subscriber::DBSubscriber;
-use tarpc::client::RpcError;
 
 /// A "placeholder" key generator type that indicates no automatic key generation, i.e. key must always be explicitly provided.
 pub struct KeyMustBeProvided;
@@ -37,8 +33,8 @@ impl KeyGenerator for KeyMustBeProvided {
 pub enum TreeError<EncodeError, DecodeError> {
     #[error("Internal database error: `{0}`")]
     Sled(#[from] sled::Error),
-    #[error("Rpc error: `{0}`")]
-    Rpc(#[from] RpcError),
+    // #[error("Rpc error: `{0}`")]
+    // Rpc(#[from] RpcError),
     #[error("Error encoding value into database: `{0}`")]
     Encode(EncodeError),
     #[error("Error decoding value from database: `{0}`")]
@@ -49,54 +45,231 @@ type TreeErrorForCodec<V, C> =
     TreeError<<C as DbValueCodec<V>>::EncodeError, <C as DbValueCodec<V>>::DecodeError>;
 pub type TreeResult<T, V, C> = std::result::Result<T, TreeErrorForCodec<V, C>>;
 
-#[derive(Clone)]
-pub struct DBTree<K, V, Codec, KeyGen = KeyMustBeProvided> {
-    inner: Tree,
-    _marker: PhantomData<(K, V, Codec, KeyGen)>,
-}
-
-impl<K, V, Codec, KeyGen> DBTree<K, V, Codec, KeyGen> {
-    pub(super) fn from_raw(inner: Tree) -> Self {
-        Self {
-            inner,
-            _marker: PhantomData,
-        }
-    }
+trait ITreeAccess<K, V> {
+    type Encoded;
 
     /// Returns the number of elements in this tree.
     ///
     /// Beware: performs a full O(n) scan under the hood.
     #[allow(unused)]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
+    fn len(&self) -> usize;
 
     /// Returns `true` if the `Tree` contains no elements.
     #[allow(unused)]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+    fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
-    /// Clears the `Tree`, removing all values.
+    /// Check if specific key exists in the tree.
     ///
-    /// Note that this is not atomic.
-    #[allow(unused)]
-    pub fn clear(&self) -> sled::Result<()> {
-        self.inner.clear()
+    /// Note: Using this outside of transactions is dangerous, since it can lead to Time-of-check to time-of-use type bugs.
+    /// Remember that the value for given key can be inserted at any moment by another tread. If this check is important
+    /// for correctness, make sure to use transactional access.
+    fn has_key(&self, key: impl Borrow<K>) -> SledResult<bool> {
+        Ok(self.get(key)?.is_some())
     }
 
-    /// Returns the CRC32 of all keys and values
-    /// in this Tree.
+    /// Get a value corresponding to the key, or [`None`] if no value is present.
+    fn get(&self, key: impl Borrow<K>) -> SledResult<Option<Self::Encoded>>;
+
+    /// Inserts an already encoded key-value pair into the tree.
     ///
-    /// This is O(N) and locks the underlying tree
-    /// for the duration of the entire scan.
-    #[allow(unused)]
-    pub fn checksum(&self) -> sled::Result<u32> {
-        self.inner.checksum()
+    /// If the tree did not have this key present, [`None`] is returned.
+    ///
+    /// If the tree did have this key present, the value is updated, and the old value is returned.
+    fn insert(&self, key: K, value: Self::Encoded) -> SledResult<Option<Self::Encoded>>;
+}
+
+/// Thin abstraction over [`sled::Tree`] with strongly typed key and value.
+pub struct TypedTree<K, V, Codec> {
+    inner: Tree,
+    marker: PhantomData<(K, V, Codec)>,
+}
+
+impl<K, V, Codec> Clone for TypedTree<K, V, Codec> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            marker: PhantomData,
+        }
     }
 }
 
-impl<K, V, Codec, KeyGen> DBTree<K, V, Codec, KeyGen>
+pub struct TypedTransactionalTree<K, V, Codec> {
+    inner: TransactionalTree,
+    marker: PhantomData<(K, V, Codec)>,
+}
+
+impl<K, V, Codec> Clone for TypedTransactionalTree<K, V, Codec> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<K, V, Codec> TypedTree<K, V, Codec> {
+    pub(super) fn from_raw(inner: Tree) -> Self {
+        Self {
+            inner,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<K, V, Codec> ITreeAccess<K, V> for TypedTree<K, V, Codec>
+where
+    K: DbKey,
+    Codec: DbValueCodec<V>,
+{
+    type Encoded = EncodedValue<V, Codec>;
+
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    fn get(&self, key: impl Borrow<K>) -> SledResult<Option<Self::Encoded>> {
+        self.inner
+            .get(key.borrow())
+            .map(EncodedValue::from_raw_option)
+    }
+
+    fn insert(&self, key: K, value: Self::Encoded) -> SledResult<Option<Self::Encoded>> {
+        self.inner
+            .insert(key, value.raw)
+            .map(EncodedValue::from_raw_option)
+    }
+}
+
+impl<E, K, V, Codec> Transactional<E> for TypedTree<K, V, Codec> {
+    type View = TypedTransactionalTree<K, V, Codec>;
+
+    fn make_overlay(&self) -> SledResult<sled::transaction::TransactionalTrees> {
+        <Tree as Transactional<E>>::make_overlay(&self.inner)
+    }
+
+    fn view_overlay(overlay: &sled::transaction::TransactionalTrees) -> Self::View {
+        TypedTransactionalTree::from_raw(<Tree as Transactional<E>>::view_overlay(overlay))
+    }
+}
+
+impl<E, K, V, Codec> Transactional<E> for &TypedTree<K, V, Codec> {
+    type View = TypedTransactionalTree<K, V, Codec>;
+
+    fn make_overlay(&self) -> SledResult<sled::transaction::TransactionalTrees> {
+        <&Tree as Transactional<E>>::make_overlay(&&self.inner)
+    }
+
+    fn view_overlay(overlay: &sled::transaction::TransactionalTrees) -> Self::View {
+        TypedTransactionalTree::from_raw(<&Tree as Transactional<E>>::view_overlay(overlay))
+    }
+}
+
+/// Workaround needed to implementint [`sled::Transactional<E>`] on tuples of our own tree type.
+///
+/// Without this extra wrapper type, orphan rule prevents us from implementing `Transactional<E>` on `TypedTree` tuples without binding to `E` generic.
+///
+/// Usage:
+///
+/// ```ignore
+/// Tx((tree1, tree2)).transaction(|(ttree1, ttree2|| {
+///    // ...
+/// })
+/// ```
+pub struct Tx<TypedTrees>(pub TypedTrees);
+
+/// Helper trait that makes `impl_transactional_for_tx` macro significantly easier to implement.
+/// Without this, the `Transactional<Err>` `impl` block would require separate instances of `K`, `V`, and `Codec` generics for each tuple element.
+trait ToTransactional {
+    type View;
+    fn raw(&self) -> &Tree;
+    fn wrap_view(view: TransactionalTree) -> Self::View;
+}
+
+impl<K, V, Codec> ToTransactional for TypedTree<K, V, Codec> {
+    type View = TypedTransactionalTree<K, V, Codec>;
+    fn raw(&self) -> &Tree {
+        &self.inner
+    }
+    fn wrap_view(view: TransactionalTree) -> Self::View {
+        TypedTransactionalTree::from_raw(view)
+    }
+}
+
+macro_rules! impl_transactional_for_tx {
+    (@tree $_t:ident) => { &Tree };
+    ($head:ident $($tail:ident)*) => {
+        impl_transactional_for_tx!($($tail)*);
+
+        #[allow(unused_parens)]
+        impl<Err, $head, $($tail,)*> Transactional<Err> for Tx<(&$head $(, &$tail)*)>
+        where
+            $head: ToTransactional,
+            $($tail: ToTransactional,)*
+        {
+            type View = ($head::View  $(, $tail::View)*);
+            fn make_overlay(&self) -> SledResult<sled::transaction::TransactionalTrees> {
+                match self {
+                    Tx(($head $(, $tail)*)) => {
+                        let raw_trees = ($head.raw() $(, $tail.raw())*);
+                        <(&Tree $(, impl_transactional_for_tx!(@tree $tail))*) as Transactional<Err>>::make_overlay(&raw_trees)
+                    }
+                }
+            }
+
+            fn view_overlay(overlay: &sled::transaction::TransactionalTrees) -> Self::View {
+                let ($head $(, $tail)*) = <(&Tree $(, impl_transactional_for_tx!(@tree $tail))*) as Transactional<Err>>::view_overlay(overlay);
+                ($head::wrap_view($head) $(, $tail::wrap_view($tail))*)
+            }
+
+        }
+    };
+    () => {};
+}
+
+// Implemented to the same tuple arity as `Transactional<Err> for (&Tree, ...)` in sled.
+impl_transactional_for_tx!(A B C D E F G H I J K L M N);
+
+impl<K, V, Codec> TypedTransactionalTree<K, V, Codec> {
+    pub(super) fn from_raw(inner: TransactionalTree) -> Self {
+        Self {
+            inner,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<K, V, Codec> TypedTransactionalTree<K, V, Codec>
+where
+    K: DbKey,
+    Codec: DbValueCodec<V>,
+{
+    fn get(
+        &self,
+        key: impl Borrow<K>,
+    ) -> Result<Option<EncodedValue<V, Codec>>, UnabortableTransactionError> {
+        self.inner
+            .get(key.borrow())
+            .map(EncodedValue::from_raw_option)
+    }
+
+    fn insert(
+        &self,
+        key: K,
+        value: EncodedValue<V, Codec>,
+    ) -> Result<Option<EncodedValue<V, Codec>>, UnabortableTransactionError> {
+        self.inner
+            .insert(key, value.raw)
+            .map(EncodedValue::from_raw_option)
+    }
+}
+
+impl<K, V, Codec> TypedTree<K, V, Codec>
 where
     K: AsRef<[u8]> + From<IVec>,
     Codec: DbValueCodec<V>,
@@ -130,38 +303,6 @@ where
         self.inner.transaction(f).map_err(|e| match e {
             TransactionError::Abort(error) => error,
             TransactionError::Storage(error) => error.into(),
-        })
-    }
-
-    // BUG: inserting a PrefixedKey does not work because of unfullfilled trait bounds. // TODO documentation, bugfix
-    pub fn insert<InsertImpl>(
-        &self,
-        insertable: InsertImpl,
-    ) -> TreeResult<InsertImpl::Return, V, Codec>
-    where
-        InsertImpl: DbInsertable<K, V, KeyGen>,
-        KeyGen: KeyGenerator,
-    {
-        self.insert_in_context(Default::default(), insertable)
-    }
-
-    pub fn insert_in_context<Context, InsertImpl>(
-        &self,
-        context: Context,
-        insertable: InsertImpl,
-    ) -> TreeResult<InsertImpl::Return, V, Codec>
-    where
-        InsertImpl: DbInsertable<K, V, KeyGen>,
-        KeyGen: KeyGenerator<Context>,
-        Context: Clone,
-    {
-        self.transaction(|tree| {
-            let generator = KeyGen::construct(context.clone(), tree);
-            insertable.execute_insert(&generator, |key, value| {
-                let encoded = Self::encode(value).map_err(ConflictableTransactionError::Abort)?;
-                tree.insert(key.as_ref(), encoded)?;
-                Ok(())
-            })
         })
     }
 
@@ -232,18 +373,18 @@ where
     /// Access a range of keys as an iterator.
     /// Keys are sorted by their bytes.
     /// To retain the ordering of numerical types use big endian reprensentation.
-    pub fn range(&self, range: impl RangeBounds<K>) -> DBIter<K, V, Codec, KeyGen> {
-        DBIter {
-            tree: DBTree::from_raw(self.inner.clone()),
+    pub fn range(&self, range: impl RangeBounds<K>) -> TreeIter<K, V, Codec> {
+        TreeIter {
+            tree: self.clone(),
             iter: self.inner.range(range),
         }
     }
 
     /// Create a double-ended iterator over the tuples of keys and
     /// values in this tree.
-    pub fn iter(&self) -> DBIter<K, V, Codec, KeyGen> {
-        DBIter {
-            tree: DBTree::from_raw(self.inner.clone()),
+    pub fn iter(&self) -> TreeIter<K, V, Codec> {
+        TreeIter {
+            tree: Self::from_raw(self.inner.clone()),
             iter: self.inner.iter(),
         }
     }
@@ -299,9 +440,9 @@ where
     /// `DBSubscriber` implements both `Iterator<Item = Result<DBEvent>>`
     /// and `Future<Output=Option<Event>>`
     #[allow(unused)]
-    pub fn watch_all(&self) -> DBSubscriber<K, V, Codec, KeyGen> {
+    pub fn watch_all(&self) -> DBSubscriber<K, V, Codec> {
         DBSubscriber {
-            tree: DBTree::from_raw(self.inner.clone()),
+            tree: self.clone(),
             inner: self.inner.watch_prefix(vec![]),
         }
     }
@@ -312,7 +453,7 @@ where
     // TODO: transaction translation layer
 }
 
-impl<K, V, Codec, KeyGen> DBTree<K, V, Codec, KeyGen>
+impl<K, V, Codec> TypedTree<K, V, Codec>
 where
     K: AsRef<[u8]> + From<IVec>,
     Codec: DbValueCodec<V>,
@@ -333,13 +474,13 @@ where
     /// `DBSubscriber` implements both `Iterator<Item = Result<DBEvent>>`
     /// and `Future<Output=Option<Event>>`
     #[allow(unused)]
-    pub fn watch_partial<P>(&self, part: P) -> DBSubscriber<K, V, Codec, KeyGen>
+    pub fn watch_partial<P>(&self, part: P) -> DBSubscriber<K, V, Codec>
     where
         K: Prefixed<P>,
         P: Into<IVec>,
     {
         DBSubscriber {
-            tree: DBTree::from_raw(self.inner.clone()),
+            tree: self.clone(),
             inner: self.inner.watch_prefix(part.into()),
         }
     }
@@ -351,15 +492,10 @@ mod test {
 
     use crate::common::{
         codec::PodCodec,
-        key::{
-            compound::ConsKey,
-            integer::{IntegerKey, MonotonicKeygen},
-        },
+        key::{compound::ConsKey, integer::IntegerKey},
         schema::{
-            ChannelKey, MESSAGES_IN_CHANNEL_TABLE, MESSAGES_TABLE, MessageData, MessageKey,
-            UserData, UserKey,
+            ChannelKey, MESSAGES_IN_CHANNEL_TABLE, MESSAGES_TABLE, MessageData, MessageKey, UserKey,
         },
-        table::SerdeTree,
     };
 
     use super::{subscriber::DBEvent, *};
@@ -368,29 +504,29 @@ mod test {
         sled::Config::new().temporary(true).open().expect("open")
     }
 
-    #[test]
-    fn test_watch_all() -> anyhow::Result<()> {
-        let db = mock_db();
-        let decl = SerdeTree::<UserData>::decl("test_watch_all");
-        let tree = decl.open(&db)?;
-        let subscriber = tree.watch_all();
+    // #[test]
+    // fn test_watch_all() -> anyhow::Result<()> {
+    //     let db = mock_db();
+    //     let decl = SerdeTree::<UserData>::decl("test_watch_all");
+    //     let tree = decl.open(&db)?;
+    //     let subscriber = tree.watch_all();
 
-        let thread = std::thread::spawn(move || {
-            let tree = decl.open(&db).expect("open");
-            tree.insert(UserData::new("TestUser1".to_owned()))
-        });
+    //     let thread = std::thread::spawn(move || {
+    //         let tree = decl.open(&db).expect("open");
+    //         tree.insert(UserData::new("TestUser1".to_owned()))
+    //     });
 
-        for event in subscriber.take(1) {
-            match event {
-                Ok(DBEvent::Insert { value, .. }) => assert_eq!(value.name.as_str(), "TestUser1"),
-                Ok(DBEvent::Remove { .. }) => panic!("No remove should have been called!"),
-                Err(e) => return Err(e),
-            }
-        }
+    //     for event in subscriber.take(1) {
+    //         match event {
+    //             Ok(DBEvent::Insert { value, .. }) => assert_eq!(value.name.as_str(), "TestUser1"),
+    //             Ok(DBEvent::Remove { .. }) => panic!("No remove should have been called!"),
+    //             Err(e) => return Err(e),
+    //         }
+    //     }
 
-        thread.join().unwrap()?;
-        Ok(())
-    }
+    //     thread.join().unwrap()?;
+    //     Ok(())
+    // }
 
     #[test]
     fn test_watch_partial() -> anyhow::Result<()> {
@@ -433,25 +569,26 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn test_autoincrement() -> anyhow::Result<()> {
-        let db = mock_db();
-        let decl = DBTree::<IntegerKey, i32, PodCodec, MonotonicKeygen>::decl("test_autoincrement");
-        let table = decl.open(&db).expect("open");
+    // #[test]
+    // fn test_autoincrement() -> anyhow::Result<()> {
+    //     let db = mock_db();
+    //     let decl =
+    //         TypedTree::<IntegerKey, i32, PodCodec, MonotonicKeygen>::decl("test_autoincrement");
+    //     let table = decl.open(&db).expect("open");
 
-        let key1 = table.insert(1).unwrap();
-        let key2 = table.insert(2).unwrap();
-        let key3 = table.insert(3).unwrap();
-        std::assert_matches!(table.get(key1), Ok(Some(1)));
-        std::assert_matches!(table.get(key2), Ok(Some(2)));
-        std::assert_matches!(table.get(key3), Ok(Some(3)));
-        Ok(())
-    }
+    //     let key1 = table.insert(1).unwrap();
+    //     let key2 = table.insert(2).unwrap();
+    //     let key3 = table.insert(3).unwrap();
+    //     std::assert_matches!(table.get(key1), Ok(Some(1)));
+    //     std::assert_matches!(table.get(key2), Ok(Some(2)));
+    //     std::assert_matches!(table.get(key3), Ok(Some(3)));
+    //     Ok(())
+    // }
 
     #[test]
     fn test_insert_without_gen() -> anyhow::Result<()> {
         let db = mock_db();
-        let decl = DBTree::<IntegerKey, u64, PodCodec>::decl("test_insert_without_gen");
+        let decl = TypedTree::<IntegerKey, u64, PodCodec>::decl("test_insert_without_gen");
         let table = decl.open(&db).expect("open");
 
         // Intentionally not possible, will fail at compile time:

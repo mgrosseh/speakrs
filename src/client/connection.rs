@@ -294,7 +294,7 @@ impl Connection {
             .await?
             .context("Error while talking to server")?;
 
-        db.channels()?.insert((key, channel))?;
+        db.channels()?.set(key, channel)?;
         Ok(key)
     }
 
@@ -326,8 +326,8 @@ impl Connection {
             .await?
             .context("Error while talking to server")?;
         let len = new_channels.len();
-        for channel in new_channels {
-            db.channels()?.insert((channel.0, channel.1))?;
+        for (key, data) in new_channels {
+            db.channels()?.set(key, data)?;
         }
         Ok(len)
     }

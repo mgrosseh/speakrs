@@ -37,13 +37,10 @@ pub fn authenticate_session(
 pub fn register_user(db: DB, data: UserData, password: String) -> ServiceResult<UserKey> {
     // TODO: we might want to check if user already exists
     // TODO: this being two steps introduces failure points!
-    let key = db
-        .users()?
-        .insert(data)
-        .map_err(|e| Into::<ServiceError>::into(e))?;
+    let key = UserKey::new_now();
+    db.users()?.set(key, data)?;
     db.users_auth()?
-        .set(key, UserAuthData::from_password(&password))
-        .map_err(|e| Into::<ServiceError>::into(e))?;
+        .set(key, UserAuthData::from_password(&password))?;
     db.user_perms()?.set(key, UserPerms::default())?;
     Ok(key)
 }

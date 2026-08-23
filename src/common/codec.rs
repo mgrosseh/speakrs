@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use std::{convert::Infallible, marker::PhantomData};
 
 use bytemuck::{Pod, PodCastError};
 use serde::{Deserialize, Serialize};
@@ -51,5 +51,42 @@ impl<T: Pod> DbValueCodec<T> for PodCodec {
 
     fn decode(ivec: &IVec) -> Result<T, Self::DecodeError> {
         bytemuck::try_pod_read_unaligned(ivec)
+    }
+}
+
+/// A value of known type `T` that is currently in its [`IVec`] representation, but can be decoded at later point.
+pub struct EncodedValue<T, Codec> {
+    pub raw: IVec,
+    pub marker: PhantomData<(T, Codec)>,
+}
+
+impl<T, Codec> EncodedValue<T, Codec> {
+    pub fn from_raw(raw: IVec) -> Self {
+        Self {
+            raw,
+            marker: PhantomData,
+        }
+    }
+
+    pub fn from_raw_option(raw: Option<IVec>) -> Option<Self> {
+        raw.map(Self::from_raw)
+    }
+}
+
+impl<T, Codec: DbValueCodec<T>> EncodedValue<T, Codec> {
+    pub fn into_encoded(value: T) -> Result<Self, Codec::EncodeError> {
+        Ok(Self::from_raw(Codec::encode_owned(value)?))
+    }
+
+    pub fn encode(value: &T) -> Result<Self, Codec::EncodeError> {
+        Ok(Self::from_raw(Codec::encode(value)?))
+    }
+
+    pub fn into_decoded(self) -> Result<T, Codec::DecodeError> {
+        Codec::decode_owned(self.raw)
+    }
+
+    pub fn decode(&self) -> Result<T, Codec::DecodeError> {
+        Codec::decode(&self.raw)
     }
 }

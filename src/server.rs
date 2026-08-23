@@ -181,7 +181,8 @@ impl common::rpc::RpcService for HelloServer {
         let messages = self.db.messages()?;
         let relationship = self.db.messages_in_channel()?;
 
-        let message_id = messages.insert(data)?;
+        let message_id = MessageKey::new_now();
+        messages.set(message_id, data)?;
         relationship.set(ConsKey::new((channel, message_id)), ())?;
         Ok(message_id)
     }
@@ -219,7 +220,9 @@ impl common::rpc::RpcService for HelloServer {
         data: ChannelData,
     ) -> ServiceResult<ChannelKey> {
         permission_guard(self.db.clone(), session, &[Permissions::CanCreateChannel])?;
-        self.db.channels()?.insert(data).map_err(|e| e.into())
+        let channel_id = ChannelKey::new_now();
+        self.db.channels()?.set(channel_id, data)?;
+        Ok(channel_id)
     }
     async fn get_channel(
         self,

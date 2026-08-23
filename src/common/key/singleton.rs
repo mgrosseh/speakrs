@@ -2,7 +2,7 @@ use sled::IVec;
 
 use crate::common::{
     codec::DbValueCodec,
-    tree::{DBTree, TreeResult},
+    tree::{TreeResult, TypedTree},
 };
 
 /// A table key that has only one allowed value. Use when you only want to store a singular record of given data type.
@@ -27,7 +27,7 @@ impl From<IVec> for SingletonKey {
     }
 }
 
-impl<V, Codec, Gen> DBTree<SingletonKey, V, Codec, Gen>
+impl<V, Codec> TypedTree<SingletonKey, V, Codec>
 where
     Codec: DbValueCodec<V>,
 {

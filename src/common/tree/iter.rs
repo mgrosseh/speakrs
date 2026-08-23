@@ -2,21 +2,20 @@ use sled::{IVec, Iter};
 
 use crate::common::{codec::DbValueCodec, tree::TreeResult};
 
-use super::DBTree;
+use super::TypedTree;
 
 #[allow(unused)]
-pub struct DBIter<K, V, Codec, KeyGen> {
-    pub(super) tree: DBTree<K, V, Codec, KeyGen>,
+pub struct TreeIter<K, V, Codec> {
+    pub(super) tree: TypedTree<K, V, Codec>,
     pub(super) iter: Iter,
 }
-impl<K, V, Codec, KeyGen> DBIter<K, V, Codec, KeyGen> {}
+impl<K, V, Codec> TreeIter<K, V, Codec> {}
 
-impl<K, V, Codec, KeyGen> DBIter<K, V, Codec, KeyGen>
+impl<K, V, Codec> TreeIter<K, V, Codec>
 where
     K: AsRef<[u8]> + From<IVec> + Send + Sync,
     Codec: DbValueCodec<V> + Send + Sync,
     V: Send + Sync,
-    KeyGen: Send + Sync,
 {
     /// Iterate over the keys of this Tree
     #[allow(unused)]
@@ -31,7 +30,7 @@ where
     }
 }
 
-impl<K, V, Codec, KeyGen> Iterator for DBIter<K, V, Codec, KeyGen>
+impl<K, V, Codec> Iterator for TreeIter<K, V, Codec>
 where
     K: AsRef<[u8]> + From<IVec>,
     Codec: DbValueCodec<V>,
@@ -39,20 +38,18 @@ where
     type Item = TreeResult<(K, V), V, Codec>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next()
-            .map(DBTree::<K, V, Codec, KeyGen>::decode_entry)
+        self.iter.next().map(TypedTree::<K, V, Codec>::decode_entry)
     }
 
     fn last(mut self) -> Option<Self::Item> {
         // TODO: double check
         self.iter
             .next_back()
-            .map(DBTree::<K, V, Codec, KeyGen>::decode_entry)
+            .map(TypedTree::<K, V, Codec>::decode_entry)
     }
 }
 
-impl<K, V, Codec, KeyGen> DoubleEndedIterator for DBIter<K, V, Codec, KeyGen>
+impl<K, V, Codec> DoubleEndedIterator for TreeIter<K, V, Codec>
 where
     K: AsRef<[u8]> + From<IVec>,
     Codec: DbValueCodec<V>,
@@ -60,6 +57,6 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter
             .next_back()
-            .map(DBTree::<K, V, Codec, KeyGen>::decode_entry)
+            .map(TypedTree::<K, V, Codec>::decode_entry)
     }
 }

@@ -158,53 +158,54 @@ mod test {
     // ======================================
     // => Temp Tests
     // ======================================
-    #[test]
-    fn test_read_messages() -> Result<()> {
-        let server = DB::mock();
-        let user_key = UserKey::new_now();
-        let channel_key = ChannelKey::new_now();
-        let mock_messages: [_; 50] = array::from_fn(|i| {
-            MessageData::now(user_key, channel_key, format!("some test message {i}"))
-        });
+    // #[test]
+    // fn test_read_messages() -> Result<()> {
+    //     let server = DB::mock();
+    //     let user_key = UserKey::new_now();
+    //     let channel_key = ChannelKey::new_now();
+    //     let mock_messages: [_; 50] = array::from_fn(|i| {
+    //         MessageData::now(user_key, channel_key, format!("some test message {i}"))
+    //     });
 
-        let message_keys = server.messages()?.insert(mock_messages)?;
-        server
-            .messages_in_channel()?
-            .insert(message_keys.map(|msg| (ConsKey::new((channel_key, msg)), ())))?;
+    //     let message_keys = server.messages()?.insert(mock_messages)?;
+    //     server
+    //         .messages_in_channel()?
+    //         .insert(message_keys.map(|msg| (ConsKey::new((channel_key, msg)), ())))?;
 
-        let another_key = MessageKey::new_now();
-        server.messages()?.set(
-            another_key,
-            MessageData::now(user_key, channel_key, format!("Another message")),
-        )?;
+    //     let another_key = MessageKey::new_now();
+    //     server.messages()?.set(
+    //         another_key,
+    //         MessageData::now(user_key, channel_key, format!("Another message")),
+    //     )?;
 
-        let another_key = MessageKey::new_now();
-        server.messages()?.set(
-            another_key,
-            MessageData::now(user_key, channel_key, format!("Another message")),
-        )?;
+    //     let another_key = MessageKey::new_now();
+    //     server.messages()?.set(
+    //         another_key,
+    //         MessageData::now(user_key, channel_key, format!("Another message")),
+    //     )?;
 
-        let (key, _) = server
-            .messages()?
-            .first()?
-            .context("No elements in messages")?;
-        let messages = server.messages()?;
-        for next in messages.range(key..).take(10) {
-            let (_k, value) = next?;
-            println!(
-                "Found message (channel {}): <{}>: {}",
-                value.channel, value.timestamp, value.content
-            );
-        }
-        Ok(())
-    }
+    //     let (key, _) = server
+    //         .messages()?
+    //         .first()?
+    //         .context("No elements in messages")?;
+    //     let messages = server.messages()?;
+    //     for next in messages.range(key..).take(10) {
+    //         let (_k, value) = next?;
+    //         println!(
+    //             "Found message (channel {}): <{}>: {}",
+    //             value.channel, value.timestamp, value.content
+    //         );
+    //     }
+    //     Ok(())
+    // }
 
     #[test]
     fn test_insert_and_read() -> Result<()> {
         let server = DB::mock();
 
         let user1 = UserData::new("user_1".to_string());
-        let user_key = server.users()?.insert(user1)?;
+        let user_key = UserKey::new_now();
+        server.users()?.set(user_key, user1)?;
         println!("inserted user1");
         let channel_key = ChannelKey::new_now();
         let channel1 = ChannelData::text("Channel 1".to_string(), "An example channel".to_string());

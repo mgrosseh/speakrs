@@ -5,13 +5,17 @@ pub mod singleton;
 pub mod uuid;
 
 pub use singleton::SingletonKey;
-pub use uuid::{UuidKey, UuidNowKeygen};
+use sled::IVec;
+pub use uuid::UuidKey;
 
 pub trait Prefixed<P> {
     // Currently only used in tests
     #[allow(unused)]
     fn prefix(&self) -> P;
 }
+
+pub trait DbKey: AsRef<[u8]> + From<IVec> + Into<IVec> {}
+impl<T> DbKey for T where T: AsRef<[u8]> + From<IVec> + Into<IVec> {}
 
 #[cfg(test)]
 mod test {

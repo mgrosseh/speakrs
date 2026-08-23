@@ -1,13 +1,12 @@
-use std::{task::Poll, time::Duration};
 use anyhow::Result;
+use std::{task::Poll, time::Duration};
 
 use pin_project_lite::pin_project;
 use sled::{Event, IVec, Subscriber};
 
 use crate::common::codec::DbValueCodec;
 
-use super::DBTree;
-
+use super::TypedTree;
 
 /// An event that happened to a key that a subscriber is interested in.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -37,8 +36,8 @@ impl<K, V> DBEvent<K, V> {
 }
 
 pin_project! {
-    pub struct DBSubscriber<K, V, Codec, KeyGen> {
-        pub(super) tree: DBTree<K, V, Codec, KeyGen>,
+    pub struct DBSubscriber<K, V, Codec> {
+        pub(super) tree: TypedTree<K, V, Codec>,
         #[pin]
         pub(super) inner: Subscriber,
     }
@@ -50,36 +49,47 @@ pub enum DBTimeoutError {
     #[error("Error decoding from database: {0}")]
     DecodeError(#[from] anyhow::Error),
     #[error("Request expired: {0}")]
-    RecvTimeoutError(#[from] std::sync::mpsc::RecvTimeoutError)
+    RecvTimeoutError(#[from] std::sync::mpsc::RecvTimeoutError),
 }
 
-impl<K, V, Codec, KeyGen> DBSubscriber<K, V, Codec, KeyGen>
+impl<K, V, Codec> DBSubscriber<K, V, Codec>
 where
     K: AsRef<[u8]> + From<IVec>,
-    Codec: DbValueCodec<V>, {
+    Codec: DbValueCodec<V>,
+{
     /// Attempts to wait for a value on this [`DBSubscriber`], returning
     /// an error if no event arrives within the provided `Duration`
     /// or if the backing `Db` shuts down.
     #[allow(unused)]
-    pub fn next_timeout(&mut self, timeout: Duration) -> std::result::Result<DBEvent<K, V>, DBTimeoutError> {
+    pub fn next_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> std::result::Result<DBEvent<K, V>, DBTimeoutError> {
         Ok(Self::decode_event(self.inner.next_timeout(timeout)?)?)
     }
 
     fn decode_event(ev: Event) -> Result<DBEvent<K, V>> {
         Ok(match ev {
-            Event::Insert { key, value } => DBEvent::Insert { key: K::from(key), value: Codec::decode_owned(value)? },
+            Event::Insert { key, value } => DBEvent::Insert {
+                key: K::from(key),
+                value: Codec::decode_owned(value)?,
+            },
             Event::Remove { key } => DBEvent::Remove { key: K::from(key) },
         })
     }
 }
 
-impl<K, V, Codec, KeyGen> Future for DBSubscriber<K, V, Codec, KeyGen>
+impl<K, V, Codec> Future for DBSubscriber<K, V, Codec>
 where
     K: AsRef<[u8]> + From<IVec>,
-    Codec: DbValueCodec<V>, {
+    Codec: DbValueCodec<V>,
+{
     type Output = Option<Result<DBEvent<K, V>>>;
 
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         match self.project().inner.poll(cx) {
             Poll::Ready(opt) => Poll::Ready(opt.map(Self::decode_event)),
             Poll::Pending => Poll::Pending,
@@ -87,10 +97,11 @@ where
     }
 }
 
-impl<K, V, Codec, KeyGen> Iterator for DBSubscriber<K, V, Codec, KeyGen>
+impl<K, V, Codec> Iterator for DBSubscriber<K, V, Codec>
 where
     K: AsRef<[u8]> + From<IVec>,
-    Codec: DbValueCodec<V>, {
+    Codec: DbValueCodec<V>,
+{
     type Item = Result<DBEvent<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {

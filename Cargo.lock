@@ -2269,21 +2269,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake2",
- "bytemuck",
- "bytes",
  "chrono",
  "clap",
  "cpal",
  "env",
  "futures",
  "linefeed",
- "pin-project-lite",
  "ringbuf",
  "serde",
  "serde_bytes",
  "serde_json",
  "sled",
  "speakrs-gui",
+ "speakrs-storage",
  "tarpc",
  "thiserror 2.0.20",
  "tokio",
@@ -2302,6 +2300,20 @@ dependencies = [
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
+]
+
+[[package]]
+name = "speakrs-storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "pin-project-lite",
+ "serde",
+ "serde_json",
+ "sled",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]

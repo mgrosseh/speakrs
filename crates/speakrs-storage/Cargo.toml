@@ -1,0 +1,16 @@
+[package]
+name = "speakrs-storage"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sled = { workspace = true }
+uuid = { workspace = true }
+bytemuck = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+pin-project-lite = "0.2.17"
+
+[build-dependencies]

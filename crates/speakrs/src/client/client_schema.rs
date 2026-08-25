@@ -1,0 +1,55 @@
+use crate::common::{
+    auth::SessionToken,
+    database::{DB, DBCommonDump},
+    schema::UserKey,
+};
+use anyhow::Result;
+use speakrs_storage::{
+    codec::{DecodeExt, Encodable},
+    table::{SerdeSingleton, TableDecl},
+};
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ClientSession {
+    pub user_key: UserKey,
+    pub token: Option<SessionToken>, // TODO: handle cases when token expires and session is none
+}
+pub type ClientDataTable = SerdeSingleton<ClientSession>;
+pub const CLIENT_DATA_TABLE: TableDecl<ClientDataTable> = ClientDataTable::decl("client_data");
+
+impl DB {
+    /// Get client data, if present.
+    /// Only intended to be used in client side code.
+    pub fn get_client_session(&self) -> Result<Option<ClientSession>> {
+        let tree = CLIENT_DATA_TABLE.open(&self.get_raw())?;
+        Ok(tree.get_single()?.decode()?)
+    }
+    /// Set client data.
+    /// Only intended to be used in client side code.
+    pub fn set_client_session(&self, data: ClientSession) -> Result<()> {
+        let tree = CLIENT_DATA_TABLE.open(&self.get_raw())?;
+        tree.insert_single(data.encode()?)?;
+        Ok(())
+    }
+}
+
+pub trait ClientDump {
+    fn dump(&self) -> Result<DBDump>;
+}
+
+impl ClientDump for DB {
+    fn dump(&self) -> Result<DBDump> {
+        let common = self.dump_shared()?;
+        let client_session = self.get_client_session()?;
+        Ok(DBDump {
+            client_session,
+            common,
+        })
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct DBDump {
+    client_session: Option<ClientSession>,
+    common: DBCommonDump,
+}

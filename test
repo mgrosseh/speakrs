@@ -1,0 +1,19 @@
+{
+  "client_session": {
+    "user_key": "01a03b3f-1a31-7481-868d-19b37ce62517",
+    "token": "01a03b3f-b2b7-7443-997d-82e4e6f35d78"
+  },
+  "common": {
+    "server_info": {
+      "name": "default_server",
+      "uuid": "01a03b3e-a764-7cb1-ad82-e608f52bce43"
+    },
+    "messages": {},
+    "channels": {},
+    "users": {
+      "01a03b3f-1a31-7481-868d-19b37ce62517": {
+        "name": "Frizi"
+      }
+    }
+  }
+}

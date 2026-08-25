@@ -1,0 +1,36 @@
+[package]
+name = "speakrs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.4", features = ["derive"] }
+futures = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sled = { workspace = true }
+speakrs-storage = { workspace = true }
+speakrs-gui = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tarpc = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+cpal = { version = "0.18.2", features = [
+	"asio",
+	"jack",
+	"pipewire",
+	"pulseaudio",
+	"realtime",
+	"realtime-dbus",
+] }
+ringbuf = "0.5.1"
+env = "1.0.1"
+toml = "1.1.4"
+linefeed = "0.6.0"
+tracing-appender = "0.2.5"
+blake2 = "0.10.6"
+serde_bytes = "0.11.19"

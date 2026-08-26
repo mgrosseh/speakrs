@@ -86,33 +86,30 @@ where
     }
 }
 
-// pub fn insert<InsertImpl>(
-//     &self,
-//     insertable: InsertImpl,
-// ) -> TreeResult<InsertImpl::Return, V, Codec>
-// where
-//     InsertImpl: DbInsertable<K, V, KeyGen>,
-//     KeyGen: KeyGenerator,
-// {
-//     self.insert_in_context(Default::default(), insertable)
-// }
+pub fn insert<InsertImpl>(&self, insertable: InsertImpl) -> TreeResult<InsertImpl::Return, V, Codec>
+where
+    InsertImpl: DbInsertable<K, V, KeyGen>,
+    KeyGen: KeyGenerator,
+{
+    self.insert_in_context(Default::default(), insertable)
+}
 
-// pub fn insert_in_context<Context, InsertImpl>(
-//     &self,
-//     context: Context,
-//     insertable: InsertImpl,
-// ) -> TreeResult<InsertImpl::Return, V, Codec>
-// where
-//     InsertImpl: DbInsertable<K, V, KeyGen>,
-//     KeyGen: KeyGenerator<Context>,
-//     Context: Clone,
-// {
-//     self.transaction(|tree| {
-//         let generator = KeyGen::construct(context.clone(), tree);
-//         insertable.execute_insert(&generator, |key, value| {
-//             let encoded = Self::encode(value).map_err(ConflictableTransactionError::Abort)?;
-//             tree.insert(key.as_ref(), encoded)?;
-//             Ok(())
-//         })
-//     })
-// }
+pub fn insert_in_context<Context, InsertImpl>(
+    &self,
+    context: Context,
+    insertable: InsertImpl,
+) -> TreeResult<InsertImpl::Return, V, Codec>
+where
+    InsertImpl: DbInsertable<K, V, KeyGen>,
+    KeyGen: KeyGenerator<Context>,
+    Context: Clone,
+{
+    self.transaction(|tree| {
+        let generator = KeyGen::construct(context.clone(), tree);
+        insertable.execute_insert(&generator, |key, value| {
+            let encoded = Self::encode(value).map_err(ConflictableTransactionError::Abort)?;
+            tree.insert(key.as_ref(), encoded)?;
+            Ok(())
+        })
+    })
+}

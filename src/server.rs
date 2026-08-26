@@ -30,8 +30,6 @@ pub use auth::AuthError;
 
 mod server_schema;
 
-// TODO: use pagination (see `cursor`) instead of new_X_since
-
 #[derive(Debug, clap::Parser)]
 pub(crate) struct ServerArguments {
     /// Port to serve tcp commands under (default: 51777)

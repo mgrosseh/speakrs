@@ -23,6 +23,7 @@ use std::{fmt::Debug, path::PathBuf};
 
 pub mod connection;
 pub mod repl;
+pub mod notifications;
 
 mod systemaudio;
 use cpal::traits::{DeviceTrait, StreamTrait};
@@ -58,7 +59,7 @@ fn audio_feedback_test() -> Result<()> {
         tracing::info!("{:#?}", output.config);
         tracing::info!("{:?}", output.device.id()?);
         tracing::info!("{:?}", input.device.id()?);
-        let audio_buffer: systemaudio::AudioBuffer = systemaudio::AudioBuffer::new(150.0, input.config);
+        let audio_buffer: systemaudio::AudioBuffer = systemaudio::AudioBuffer::new(50.0, input.config);
         let input_stream = systemaudio::capture_audio(input, audio_buffer.producer)?;
         let output_stream = systemaudio::receive_audio(output, audio_buffer.consumer)?;
         match input_stream.play() {

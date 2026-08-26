@@ -351,11 +351,3 @@ pub fn current_connection() -> &'static RwLock<Connection> {
 pub fn clone_current_connection() -> Connection {
     current_connection().read().unwrap().clone()
 }
-
-// TODO: utilize
-// let last_known_message = db
-//     .messages()?
-//     .try_filter(|kv| kv.0.prefix() == channel.0)
-//     .last()
-//     .transpose()?
-//     .map(|kv| kv.0);

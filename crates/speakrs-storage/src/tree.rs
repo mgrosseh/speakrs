@@ -337,44 +337,6 @@ where
         }
     }
 
-    /// Returns a double ended iterator filtered by `filter`.
-    ///
-    /// Convenience method for `iter().filter()`
-    // #[allow(unused)]
-    // pub fn try_filter(
-    //     &self,
-    //     filter: impl Fn(&(K, Encoded)) -> bool,
-    // ) -> impl DoubleEndedIterator<Item = TreeResult<(K, Encoded), Encoded>> {
-    //     self.iter().filter(move |result| match result {
-    //         Ok(kv) => filter(kv),
-    //         Err(_) => true,
-    //     })
-    // }
-
-    /// Searches for a value that satisfies a predicate.
-    ///
-    /// Convenience method for `iter().find()`
-    // pub fn try_find(
-    //     &self,
-    //     predicate: impl Fn(&(K, V)) -> bool,
-    // ) -> Option<TreeResult<(K, V), Encoded>> {
-    //     self.iter().find(move |result| match result {
-    //         Ok(kv) => predicate(kv),
-    //         Err(_) => true,
-    //     })
-    // }
-
-    /// Takes a closure and creates an iterator which calls that closure on each
-    /// element.
-    ///
-    /// Convenience method for `iter().map()`
-    // pub fn map<T>(
-    //     &self,
-    //     mut map_fn: impl FnMut((K, V)) -> T,
-    // ) -> impl DoubleEndedIterator<Item = TreeResult<T, Encoded>> {
-    //     self.iter().map(move |result| result.map(|v| map_fn(v)))
-    // }
-
     /// Subscribe to `DBEvent`s that happen to all keys.
     /// `DBEvents` for particular keys are guaranteed to be
     /// witnessed in the same order by all threads, but

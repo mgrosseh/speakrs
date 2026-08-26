@@ -22,6 +22,7 @@ use std::{fmt::Debug, path::PathBuf};
 use systemaudio::SystemSettings;
 
 pub mod connection;
+pub mod notifications;
 pub mod repl;
 
 mod systemaudio;
@@ -64,7 +65,7 @@ fn audio_feedback_test() -> Result<()> {
         tracing::info!("{:?}", output.device.id()?);
         tracing::info!("{:?}", input.device.id()?);
         let audio_buffer: systemaudio::AudioBuffer =
-            systemaudio::AudioBuffer::new(150.0, input.config);
+            systemaudio::AudioBuffer::new(50.0, input.config);
         let input_stream = systemaudio::capture_audio(input, audio_buffer.producer)?;
         let output_stream = systemaudio::receive_audio(output, audio_buffer.consumer)?;
         match input_stream.play() {

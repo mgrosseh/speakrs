@@ -1,6 +1,7 @@
 use super::{
     ClientArguments,
-    connection::{Connection, clone_current_connection, current_connection}, notifications,
+    connection::{Connection, clone_current_connection, current_connection},
+    notifications,
 };
 
 use crate::common::{
@@ -301,12 +302,13 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
         dump,
         check_connection,
     ),
-    CommandTreeMember::binding( // TODO: this should ideally be only available in debug mode and then hidden otherwise
+    CommandTreeMember::binding(
+        // TODO: this should ideally be only available in debug mode and then hidden otherwise
         "notify_message",
         "Debug: Send notification about message",
         &[],
-        notify
-    )
+        notify,
+    ),
 ]);
 
 fn notify(_: String) -> JoinHandle<Result<()>> {

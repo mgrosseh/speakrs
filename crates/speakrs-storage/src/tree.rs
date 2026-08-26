@@ -7,7 +7,6 @@ use crate::{
     tree::subscriber::DBSubscriber,
 };
 
-// use anyhow::Result;
 use iter::TypedTreeIter;
 use sled::{
     IVec, Transactional, Tree,
@@ -440,15 +439,17 @@ mod test {
     use std::error::Error;
 
     use bytemuck::{Pod, Zeroable};
+    use serde::{Deserialize, Serialize};
     use sled::Db;
 
     use crate::{
-        codec::{Encodable, EncodedValue, PodCodec},
+        codec::{DecodeExt, Encodable, EncodedValue, PodCodec},
         key::{
             UuidKey,
             compound::{CompoundKey, ConsKey},
             integer::IntegerKey,
         },
+        table::SerdeTree,
     };
 
     use super::{subscriber::TypedEvent, *};
@@ -457,31 +458,7 @@ mod test {
         sled::Config::new().temporary(true).open().expect("open")
     }
 
-    // #[test]
-    // fn test_watch_all() -> anyhow::Result<()> {
-    //     let db = mock_db();
-    //     let decl = SerdeTree::<UserData>::decl("test_watch_all");
-    //     let tree = decl.open(&db)?;
-    //     let subscriber = tree.watch_all();
-
-    //     let thread = std::thread::spawn(move || {
-    //         let tree = decl.open(&db).expect("open");
-    //         tree.insert(UserData::new("TestUser1".to_owned()))
-    //     });
-
-    //     for event in subscriber.take(1) {
-    //         match event {
-    //             Ok(DBEvent::Insert { value, .. }) => assert_eq!(value.name.as_str(), "TestUser1"),
-    //             Ok(DBEvent::Remove { .. }) => panic!("No remove should have been called!"),
-    //             Err(e) => return Err(e),
-    //         }
-    //     }
-
-    //     thread.join().unwrap()?;
-    //     Ok(())
-    // }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod, Serialize, Deserialize)]
     #[repr(C)]
     struct TestData {
         x: u32,
@@ -502,6 +479,41 @@ mod test {
     type Test2Tree = TypedTree<Test2Key, EncodedValue<Test2Data, PodCodec>>;
 
     type RelationTree = TypedTree<CompoundKey<(TestKey, Test2Key)>, ()>;
+
+    #[test]
+    fn test_watch_all() -> anyhow::Result<()> {
+        let db = mock_db();
+        let decl = SerdeTree::<TestData>::decl("test_watch_all");
+        let tree = decl.open(&db)?;
+        let subscriber = tree.watch_all();
+
+        let thread = std::thread::spawn(move || -> anyhow::Result<()> {
+            let tree = decl.open(&db).expect("open");
+            tree.insert(
+                TestKey::new_now(),
+                TestData {
+                    x: 10,
+                    y: [5, 1, 2, 7],
+                }
+                .encode()?,
+            )?;
+            Ok(())
+        });
+
+        for event in subscriber.take(1) {
+            match event {
+                TypedEvent::Insert { encoded, .. } => {
+                    let value = encoded.decode()?;
+                    assert_eq!(value.x, 10);
+                    assert_eq!(value.y, [5, 1, 2, 7]);
+                }
+                TypedEvent::Remove { .. } => panic!("No remove should have been called!"),
+            }
+        }
+
+        thread.join().unwrap()?;
+        Ok(())
+    }
 
     #[test]
     fn test_watch_partial() -> anyhow::Result<()> {
@@ -558,33 +570,15 @@ mod test {
         Ok(())
     }
 
-    // #[test]
-    // fn test_autoincrement() -> anyhow::Result<()> {
-    //     let db = mock_db();
-    //     let decl =
-    //         TypedTree::<IntegerKey, i32, PodCodec, MonotonicKeygen>::decl("test_autoincrement");
-    //     let table = decl.open(&db).expect("open");
-
-    //     let key1 = table.insert(1).unwrap();
-    //     let key2 = table.insert(2).unwrap();
-    //     let key3 = table.insert(3).unwrap();
-    //     std::assert_matches!(table.get(key1), Ok(Some(1)));
-    //     std::assert_matches!(table.get(key2), Ok(Some(2)));
-    //     std::assert_matches!(table.get(key3), Ok(Some(3)));
-    //     Ok(())
-    // }
-
     #[test]
-    fn test_insert_without_gen() -> Result<(), Box<dyn Error>> {
+    fn test_insert() -> Result<(), Box<dyn Error>> {
         let db = mock_db();
-        let decl =
-            TypedTree::<IntegerKey, EncodedValue<u64, PodCodec>>::decl("test_insert_without_gen");
+        let decl = TypedTree::<IntegerKey, EncodedValue<u64, PodCodec>>::decl("test_insert");
         let table = decl.open(&db).expect("open");
 
-        // Intentionally not possible, will fail at compile time:
-        // table.insert(30).unwrap();
-
         table.insert(IntegerKey(2), 20.encode()?)?;
+
+        assert_eq!(table.get(IntegerKey(2)).decode()?, Some(20));
 
         Ok(())
     }

@@ -1,35 +1,21 @@
-[package]
-name = "speakrs"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "3"
+members = ["crates/speakrs", "crates/speakrs-gui", "crates/speakrs-storage"]
 
-[dependencies]
-bytes = "1.12.1"
-clap = { version = "4.6.4", features = ["derive"] }
+[workspace.dependencies]
+# Core dependencies shared across multiple crates
+anyhow = "1.0.104"
+bytemuck = { version = "1.25.2", features = ["extern_crate_std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-futures = "0.3"
-tracing = { version = "0.1" }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sled = "0.34.7"
 tarpc = { version = "0.37.0", features = ["full"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
-anyhow = "1.0.104"
-speakrs-gui = { path = "crates/speakrs-gui" }
-sled = "0.34.7"
+tracing = { version = "0.1" }
 uuid = { version = "1.24.0", features = ["serde", "v4", "v7", "bytemuck"] }
-chrono = { version = "0.4.45", features = ["serde"] }
-cpal = { version = "0.18.2", features = ["asio", "jack", "pipewire", "pulseaudio", "realtime", "realtime-dbus"] }
-ringbuf = "0.5.1"
-bytemuck = { version = "1.25.2", features = ["extern_crate_std"] }
-env = "1.0.1"
-toml = "1.1.4"
 thiserror = "2.0.19"
-linefeed = "0.6.0"
-pin-project-lite = "0.2.17"
-tracing-appender = "0.2.5"
-blake2 = "0.10.6"
-serde_bytes = "0.11.19"
-notify-rust = "4.18.0"
+futures = "0.3"
 
-[workspace]
-members = [".", "crates/speakrs-gui"]
+# Our own crates
+speakrs-storage = { path = "crates/speakrs-storage" }
+speakrs-gui = { path = "crates/speakrs-gui" }

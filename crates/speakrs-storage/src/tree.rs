@@ -324,8 +324,8 @@ where
     /// To retain the ordering of numerical types use big endian reprensentation.
     pub fn range(&self, range: impl RangeBounds<K>) -> TypedTreeIter<K, Encoded> {
         TypedTreeIter {
-            tree: self.clone(),
             iter: self.inner.range(range),
+            marker: PhantomData,
         }
     }
 
@@ -333,8 +333,8 @@ where
     /// values in this tree.
     pub fn iter(&self) -> TypedTreeIter<K, Encoded> {
         TypedTreeIter {
-            tree: Self::from_raw(self.inner.clone()),
             iter: self.inner.iter(),
+            marker: PhantomData,
         }
     }
 

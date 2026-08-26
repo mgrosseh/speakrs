@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use sled::Iter;
 
 use crate::{
@@ -9,8 +11,8 @@ use crate::{
 use super::TypedTree;
 
 pub struct TypedTreeIter<K, Encoded> {
-    pub(super) _tree: TypedTree<K, Encoded>,
     pub(super) iter: Iter,
+    pub(super) marker: PhantomData<(K, Encoded)>,
 }
 impl<K, Encoded> TypedTreeIter<K, Encoded>
 where

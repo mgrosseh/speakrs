@@ -8,9 +8,8 @@ use crate::{
 
 use super::TypedTree;
 
-#[allow(unused)]
 pub struct TypedTreeIter<K, Encoded> {
-    pub(super) tree: TypedTree<K, Encoded>,
+    pub(super) _tree: TypedTree<K, Encoded>,
     pub(super) iter: Iter,
 }
 impl<K, Encoded> TypedTreeIter<K, Encoded>

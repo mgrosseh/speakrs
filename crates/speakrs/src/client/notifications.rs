@@ -1,11 +1,17 @@
 use notify_rust::Notification;
 
-// TODO: actions
-
-pub fn message() -> notify_rust::error::Result<notify_rust::NotificationHandle> {
+#[allow(unused)]
+pub fn message(
+    channel_name: &str,
+    sender_name: &str,
+    message_content: &str,
+) -> notify_rust::error::Result<notify_rust::NotificationHandle> {
+    let title = format!("{sender_name} [{channel_name}]");
+    let body = message_content;
     Ok(Notification::new()
-        .summary("News")
-        .body("This will almost look like real")
+        .summary(&title)
+        .body(body)
+        .action("view", "View") // TODO: handle action using x.wait_for_response
         .icon("firefox")
         .show()?)
 }

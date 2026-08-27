@@ -302,21 +302,7 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
         dump,
         check_connection,
     ),
-    CommandTreeMember::binding(
-        // TODO: this should ideally be only available in debug mode and then hidden otherwise
-        "notify_message",
-        "Debug: Send notification about message",
-        &[],
-        notify,
-    ),
 ]);
-
-fn notify(_: String) -> JoinHandle<Result<()>> {
-    tokio::spawn(async {
-        let _ = notifications::message();
-        Ok(())
-    })
-}
 
 fn help(_: String) -> JoinHandle<Result<()>> {
     tokio::spawn(async {

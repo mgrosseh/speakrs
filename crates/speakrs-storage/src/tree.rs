@@ -72,7 +72,7 @@ pub enum TreeError {
     #[error(transparent)]
     Storage(#[from] sled::Error),
     #[error(transparent)]
-    Other(#[from] eyre::Error),
+    Other(#[from] eyre::ErrReport),
 }
 
 impl TreeError {
@@ -583,7 +583,7 @@ mod test {
                 .encode()?,
             )?;
             relation_tree.insert(ConsKey::new((test_key, test2_key)), ())?;
-            Ok::<_, eyre::Error>(())
+            Ok::<_, eyre::ErrReport>(())
         });
 
         for event in subscriber.take(1) {

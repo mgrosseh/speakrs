@@ -47,7 +47,7 @@ pub fn create_or_open<Side: SideData>(
 
 #[cfg(test)]
 mod test {
-    use eyre::Context;
+    use eyre::ResultExt as _;
     use speakrs_storage::pagination::Pagination;
 
     use crate::schema::{channel::Channel, message::Message, user::User};
@@ -130,10 +130,10 @@ mod test {
 
         let got_channel = db
             .channel(channel_key)
-            .context("Expected channel that was just inserted")?;
+            .wrap_err("Expected channel that was just inserted")?;
         let got_message1 = db
             .message(message_key)
-            .context("Expected message value that was just inserted")?;
+            .wrap_err("Expected message value that was just inserted")?;
         let got_user = got_message1.author()?;
         println!(
             "Had message: @\"{}\" <{}> {}: {}",

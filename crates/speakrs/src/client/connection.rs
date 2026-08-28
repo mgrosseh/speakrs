@@ -8,7 +8,7 @@ use crate::{
         user::{User, UserId},
     },
 };
-use eyre::{Context, Result};
+use eyre::{Result, ResultExt};
 use speakrs_storage::pagination::{Edge, Pagination};
 use std::{
     fmt::Debug,
@@ -108,7 +108,7 @@ impl Connection {
             .get_server_data(tarpc::context::current())
             .instrument(info_span!("Asking server for server data"))
             .await?
-            .context("Error while talking to server")?;
+            .wrap_err("Error while talking to server")?;
 
         let db = open_client_db(data)?;
         if let Some(client_session) = db.current_session()?.focus {
@@ -131,11 +131,11 @@ impl Connection {
     /// Note that after this a [`Connection::login`] is required.
     pub async fn register_user(self, username: &str, password: &str) -> Result<Self> {
         match self {
-            Self::Empty => Err(eyre::anyhow!(
+            Self::Empty => Err(eyre::eyre!(
                 "Cannot register with Empty connection. Connect first!"
             )),
             // WARN: currently we always assume things work, client and server didn't desync their logins etc. // TODO
-            Self::Active(_) => Err(eyre::anyhow!(
+            Self::Active(_) => Err(eyre::eyre!(
                 "Cannot register with active connection, as this implies we are already registered."
             )),
             Self::Unregistered(UnregisteredConnection { service_client, db }) => {
@@ -147,7 +147,7 @@ impl Connection {
                     )
                     .instrument(info_span!("Asking server for new user"))
                     .await?
-                    .context("Error while talking to server")?;
+                    .wrap_err("Error while talking to server")?;
 
                 let client_data = ClientSession {
                     user_key,
@@ -158,7 +158,7 @@ impl Connection {
                     cursor: user_key,
                 }])?;
                 db.set_current_session(client_data.clone())
-                    .context("Error while writing to local database")?;
+                    .wrap_err("Error while writing to local database")?;
                 Ok(Self::Active(ActiveConnection {
                     service_client,
                     db,
@@ -185,7 +185,7 @@ impl Connection {
                         .validate_session(tarpc::context::current(), session)
                         .instrument(info_span!("Validating stored session"))
                         .await?
-                        .context("Error while talking to server")?
+                        .wrap_err("Error while talking to server")?
                 } else {
                     false
                 }
@@ -201,10 +201,10 @@ impl Connection {
             return Ok(self);
         }
         match self {
-            Self::Empty => Err(eyre::anyhow!(
+            Self::Empty => Err(eyre::eyre!(
                 "Cannot login with Empty connection. Connect first!"
             )),
-            Self::Unregistered(_) => Err(eyre::anyhow!(
+            Self::Unregistered(_) => Err(eyre::eyre!(
                 "Cannot login with an unregistered connection, register first."
             )),
             Self::Active(ActiveConnection {
@@ -217,14 +217,14 @@ impl Connection {
                     .authenticate_session(tarpc::context::current(), user_key, password.clone())
                     .instrument(info_span!("Authenticating with server using credentials"))
                     .await?
-                    .context("Error while talking to server")?;
+                    .wrap_err("Error while talking to server")?;
 
                 let session = ClientSession {
                     user_key: user_key,
                     token: Some(token),
                 };
                 db.set_current_session(session.clone())
-                    .context("Error while writing to local database")?;
+                    .wrap_err("Error while writing to local database")?;
 
                 Ok(Self::Active(ActiveConnection {
                     service_client,
@@ -240,10 +240,10 @@ impl Connection {
         action: &str,
     ) -> Result<(&RpcServiceClient, ClientDataStore, (UserId, SessionToken))> {
         match self {
-            Self::Empty => Err(eyre::anyhow!(
+            Self::Empty => Err(eyre::eyre!(
                 "Cannot {action} with Empty connection. Connect first!"
             )),
-            Self::Unregistered(_) => Err(eyre::anyhow!(
+            Self::Unregistered(_) => Err(eyre::eyre!(
                 "Cannot {action} with an unregistered connection, register first."
             )),
             Self::Active(a) => {
@@ -254,7 +254,7 @@ impl Connection {
                 {
                     Ok((&a.service_client, a.db.clone(), (user_key, token)))
                 } else {
-                    Err(eyre::anyhow!(
+                    Err(eyre::eyre!(
                         "Cannot {action} with a connection that is not logged in, login first."
                     ))
                 }
@@ -287,7 +287,7 @@ impl Connection {
             .create_channel(ctx, token, channel.clone())
             .instrument(info_span!("Creating channel in server"))
             .await?
-            .context("Error while talking to server")?;
+            .wrap_err("Error while talking to server")?;
 
         let channel = client.get_channel(ctx, token, key).await??;
 
@@ -312,7 +312,7 @@ impl Connection {
             )
             .instrument(info_span!("Asking server for ALL messages"))
             .await?
-            .context("Error while talking to server")?;
+            .wrap_err("Error while talking to server")?;
         let len = new_messages.edges.len();
         for edge in new_messages {
             db.sync_message(edge)?;
@@ -333,7 +333,7 @@ impl Connection {
             )
             .instrument(info_span!("Asking server for channel list"))
             .await?
-            .context("Error while talking to server")?;
+            .wrap_err("Error while talking to server")?;
         let len = new_channels.edges.len();
         db.sync_channels(new_channels)?;
         Ok(len)

@@ -1,4 +1,4 @@
-use eyre::{Context, Result};
+use eyre::{Result, ResultExt as _};
 use linefeed::{Completion, Prompter, Terminal};
 use std::fmt::{Debug, Display};
 use tokio::task::JoinHandle;
@@ -370,7 +370,7 @@ pub enum ExecuteError {
     #[error("Command has no associated binding.")]
     NoBinding,
     #[error("Error during command execution: {0:?}")]
-    Error(eyre::Error),
+    Error(eyre::ErrReport),
 }
 
 #[derive(Clone, Debug)]
@@ -457,9 +457,9 @@ impl<'a, T> CommandTree<'a, T> {
         }
         binding(args)
             .await
-            .context("Join error while executing command")
+            .wrap_err("Join error while executing command")
             .map_err(|_| ExecuteError::JoinError)?
-            .with_context(|| format!("while executing command: {}", line))
+            .wrap_err_with(|| format!("while executing command: {}", line))
             .map_err(ExecuteError::Error)?;
         Ok(true)
     }

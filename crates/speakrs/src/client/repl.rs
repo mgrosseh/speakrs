@@ -470,7 +470,7 @@ fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
         let connection = clone_current_connection();
         // TODO: these arg checks should be handled by arg system
         if !arg_guard(&args) {
-            return Ok::<(), eyre::Error>(());
+            return Ok(());
         }
         println!("Syncing messages...");
         let len = connection.download_all_messages().await?;
@@ -479,7 +479,7 @@ fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
             "Got {} new messages. Use `message view CHANNEL` to list them.",
             len
         );
-        Ok::<(), eyre::Error>(())
+        eyre::Ok(())
     })
 }
 fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {

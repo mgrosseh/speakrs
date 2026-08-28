@@ -7,8 +7,8 @@ use sled::IVec;
 use crate::tree::{TreeError, TreeResult};
 
 pub trait DbValueCodec<T> {
-    type EncodeError: std::error::Error + Send + Sync + 'static + Into<eyre::Error>;
-    type DecodeError: std::error::Error + Send + Sync + 'static + Into<eyre::Error>;
+    type EncodeError: std::error::Error + Send + Sync + 'static + Into<eyre::ErrReport>;
+    type DecodeError: std::error::Error + Send + Sync + 'static + Into<eyre::ErrReport>;
 
     fn encode_ref(value: &T) -> Result<IVec, Self::EncodeError>;
     fn encode(value: T) -> Result<IVec, Self::EncodeError> {
@@ -71,7 +71,7 @@ impl<T, Codec> Clone for EncodedValue<T, Codec> {
 
 pub trait Decodable {
     type Decoded;
-    type DecodeError: std::error::Error + Send + Sync + 'static + Into<eyre::Error>;
+    type DecodeError: std::error::Error + Send + Sync + 'static + Into<eyre::ErrReport>;
 
     fn into_raw(self) -> IVec;
 
@@ -138,7 +138,7 @@ where
 }
 
 pub trait Encodable<Encoded> {
-    type EncodeError: std::error::Error + Send + Sync + 'static + Into<eyre::Error>;
+    type EncodeError: std::error::Error + Send + Sync + 'static + Into<eyre::ErrReport>;
     fn encode(self) -> Result<Encoded, Self::EncodeError>;
 }
 

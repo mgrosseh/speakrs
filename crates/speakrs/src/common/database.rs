@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use eyre::Result;
 use tracing::info;
 use uuid::Uuid;
 
@@ -47,7 +47,7 @@ pub fn create_or_open<Side: SideData>(
 
 #[cfg(test)]
 mod test {
-    use anyhow::Context;
+    use eyre::Context;
     use speakrs_storage::pagination::Pagination;
 
     use crate::schema::{channel::Channel, message::Message, user::User};

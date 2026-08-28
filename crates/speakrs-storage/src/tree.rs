@@ -72,7 +72,7 @@ pub enum TreeError {
     #[error(transparent)]
     Storage(#[from] sled::Error),
     #[error(transparent)]
-    Other(#[from] anyhow::Error),
+    Other(#[from] eyre::Error),
 }
 
 impl TreeError {
@@ -518,13 +518,13 @@ mod test {
     type RelationTree = TypedTree<CompoundKey<(TestKey, Test2Key)>, ()>;
 
     #[test]
-    fn test_watch_all() -> anyhow::Result<()> {
+    fn test_watch_all() -> eyre::Result<()> {
         let db = mock_db();
         let decl = SerdeTree::<TestData>::decl("test_watch_all");
         let tree = decl.open(&db)?;
         let subscriber = tree.watch_all();
 
-        let thread = std::thread::spawn(move || -> anyhow::Result<()> {
+        let thread = std::thread::spawn(move || -> eyre::Result<()> {
             let tree = decl.open(&db).expect("open");
             tree.insert(
                 TestKey::new_now(),
@@ -553,7 +553,7 @@ mod test {
     }
 
     #[test]
-    fn test_watch_partial() -> anyhow::Result<()> {
+    fn test_watch_partial() -> eyre::Result<()> {
         let db = mock_db();
         let test_tree = TestTree::open(&db, "test")?;
         let test2_tree = Test2Tree::open(&db, "test2")?;
@@ -583,7 +583,7 @@ mod test {
                 .encode()?,
             )?;
             relation_tree.insert(ConsKey::new((test_key, test2_key)), ())?;
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, eyre::Error>(())
         });
 
         for event in subscriber.take(1) {

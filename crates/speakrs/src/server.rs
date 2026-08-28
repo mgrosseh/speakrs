@@ -58,7 +58,7 @@ pub(crate) struct ServerArguments {
     dump_db_to: Option<String>,
 }
 
-pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
+pub(crate) async fn run(args: ServerArguments) -> eyre::Result<()> {
     let db = open_server_db(args.name.to_string())?;
     if let Some(_path) = args.dump_db_to {
         // TODO
@@ -108,7 +108,7 @@ impl ServerConfig {
 // ======================================
 // => RPC
 // ======================================
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct RpcServer {
     #[allow(unused)] // TODO: consider if needed
     addr: SocketAddr,
@@ -122,10 +122,12 @@ impl RpcServer {
 }
 
 impl common::rpc::RpcService for RpcServer {
+    #[tracing::instrument]
     async fn get_server_data(self, _: Context) -> ServiceResult<ServerInfo> {
         Ok(self.db.server_info()?)
     }
 
+    #[tracing::instrument]
     async fn register_user(
         self,
         _: Context,
@@ -134,6 +136,7 @@ impl common::rpc::RpcService for RpcServer {
     ) -> ServiceResult<UserId> {
         Ok(self.db.register_user(name, &password)?)
     }
+    #[tracing::instrument]
     async fn authenticate_session(
         self,
         _: Context,
@@ -238,7 +241,7 @@ impl common::rpc::RpcService for RpcServer {
 }
 
 #[tracing::instrument(skip(db))]
-async fn command_server(args: ServerArguments, db: ServerDataStore) -> anyhow::Result<()> {
+async fn command_server(args: ServerArguments, db: ServerDataStore) -> eyre::Result<()> {
     let server_addr = if args.ipv6 {
         (IpAddr::V6(Ipv6Addr::UNSPECIFIED), args.port)
     } else {

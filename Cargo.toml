@@ -4,7 +4,6 @@ members = ["crates/speakrs", "crates/speakrs-gui", "crates/speakrs-storage"]
 
 [workspace.dependencies]
 # Core dependencies shared across multiple crates
-anyhow = "1.0.104"
 bytemuck = { version = "1.25.2", features = ["extern_crate_std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -15,7 +14,11 @@ tracing = { version = "0.1" }
 uuid = { version = "1.24.0", features = ["serde", "v4", "v7", "bytemuck"] }
 thiserror = "2.0.19"
 futures = "0.3"
+eyre = "0.6.14"
 
 # Our own crates
 speakrs-storage = { path = "crates/speakrs-storage" }
 speakrs-gui = { path = "crates/speakrs-gui" }
+
+[profile.dev.package.backtrace]
+opt-level = 3

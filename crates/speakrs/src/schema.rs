@@ -68,7 +68,7 @@ struct IdNotFound<T>(T);
 
 impl<T> From<IdNotFound<T>> for TreeError
 where
-    IdNotFound<T>: Into<anyhow::Error>,
+    IdNotFound<T>: Into<eyre::Error>,
 {
     fn from(error: IdNotFound<T>) -> Self {
         TreeError::Other(error.into())
@@ -77,7 +77,7 @@ where
 
 impl<T> From<IdNotFound<T>> for ConflictableTransactionError<TreeError>
 where
-    IdNotFound<T>: Into<anyhow::Error>,
+    IdNotFound<T>: Into<eyre::Error>,
 {
     fn from(value: IdNotFound<T>) -> Self {
         ConflictableTransactionError::Abort(TreeError::from(value))

@@ -7,7 +7,7 @@ use crate::{
     common::{self, config::config_home},
     schema::channel::Channel,
 };
-use anyhow::Result;
+use eyre::Result;
 use linefeed::{Completion, Interface, ReadResult};
 use speakrs_storage::pagination::Pagination;
 use std::{fmt::Debug, usize};
@@ -21,10 +21,6 @@ use tracing::{error, info, warn};
 use command_system::*;
 
 pub mod command_system;
-
-fn print_error(e: impl Debug) {
-    println!("{e:?}");
-}
 
 pub fn split_first_word(s: &str) -> (&str, &str) {
     let s = s.trim();
@@ -152,7 +148,7 @@ pub async fn repl(args: ClientArguments) -> Result<()> {
                 "You are currently not connected to a server, use `connect` or see `help`."
             ),
             Ok(true) => (),
-            Err(e) => print_error(e),
+            Err(e) => println!("{}", e),
         }
     }
     if let Err(e) = interface.save_history(history_file.clone()) {
@@ -172,7 +168,7 @@ fn check_connection() -> bool {
     current_connection().read().unwrap().is_registered()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum ArgumentType {
     ChannelName,
     String,
@@ -180,14 +176,14 @@ pub(super) enum ArgumentType {
     SocketAddress,
 }
 impl Argument for ArgumentType {
-    fn matches_simple(self, _word: &str) -> bool {
+    fn matches_simple(&self, _word: &str) -> bool {
         true // TODO: could depending on type include a quick test of sorts to categorize this argument roughly, full test might be too expensive
     }
-    fn matches_full(self, _word: &str) -> bool {
+    fn matches_full(&self, _word: &str) -> bool {
         true // TODO
     }
 
-    fn add_completions(self, compls: &mut Vec<Completion>, word: &str) {
+    fn add_completions(&self, compls: &mut Vec<Completion>, word: &str) {
         match self {
             ArgumentType::ChannelName => match fetch_all_channel_names() {
                 Ok(names) => {
@@ -474,7 +470,7 @@ fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
         let connection = clone_current_connection();
         // TODO: these arg checks should be handled by arg system
         if !arg_guard(&args) {
-            return Ok::<(), anyhow::Error>(());
+            return Ok::<(), eyre::Error>(());
         }
         println!("Syncing messages...");
         let len = connection.download_all_messages().await?;
@@ -483,7 +479,7 @@ fn repl_message_sync(args: String) -> JoinHandle<Result<()>> {
             "Got {} new messages. Use `message view CHANNEL` to list them.",
             len
         );
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Error>(())
     })
 }
 fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {

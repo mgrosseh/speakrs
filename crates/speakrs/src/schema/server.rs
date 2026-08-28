@@ -27,6 +27,12 @@ pub struct ServerOnlyData {
     pub(self) user_perms: OneToOne<UserId, UserPerms, SerdeJsonCodec>,
 }
 
+impl std::fmt::Debug for ServerOnlyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerOnlyData").finish()
+    }
+}
+
 impl SideData for ServerOnlyData {
     fn as_enum(&self) -> SidedData<'_> {
         SidedData::Server(self)

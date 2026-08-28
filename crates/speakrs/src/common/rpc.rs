@@ -89,8 +89,8 @@ impl From<sled::Error> for ServiceError {
     }
 }
 
-impl From<anyhow::Error> for ServiceError {
-    fn from(value: anyhow::Error) -> Self {
+impl From<eyre::Error> for ServiceError {
+    fn from(value: eyre::Error) -> Self {
         Self::Generic(value.to_string())
     }
 }

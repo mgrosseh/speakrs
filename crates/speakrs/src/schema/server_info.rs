@@ -24,7 +24,7 @@ impl<S> DataStore<S> {
     /// Run [`ServerDB::is_init()`] first to check if it's safe to get data
     pub fn server_info(&self) -> TreeResult<ServerInfo> {
         let Some(encoded) = self.server_data.get_single()? else {
-            return Err(anyhow::anyhow!(
+            return Err(eyre::anyhow!(
                 "ServerInfo not initialized. Make sure to initialialize the database before calling `get_server_data`."
             ).into());
         };

@@ -10,7 +10,7 @@ bytemuck = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-anyhow = { workspace = true }
+eyre = { workspace = true }
 pin-project-lite = "0.2.17"
 
 [build-dependencies]

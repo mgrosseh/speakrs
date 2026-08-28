@@ -8,7 +8,7 @@ use crate::{
         user::{User, UserId},
     },
 };
-use anyhow::{Context, Result};
+use eyre::{Context, Result};
 use speakrs_storage::pagination::{Edge, Pagination};
 use std::{
     fmt::Debug,
@@ -131,11 +131,11 @@ impl Connection {
     /// Note that after this a [`Connection::login`] is required.
     pub async fn register_user(self, username: &str, password: &str) -> Result<Self> {
         match self {
-            Self::Empty => Err(anyhow::anyhow!(
+            Self::Empty => Err(eyre::anyhow!(
                 "Cannot register with Empty connection. Connect first!"
             )),
             // WARN: currently we always assume things work, client and server didn't desync their logins etc. // TODO
-            Self::Active(_) => Err(anyhow::anyhow!(
+            Self::Active(_) => Err(eyre::anyhow!(
                 "Cannot register with active connection, as this implies we are already registered."
             )),
             Self::Unregistered(UnregisteredConnection { service_client, db }) => {
@@ -201,10 +201,10 @@ impl Connection {
             return Ok(self);
         }
         match self {
-            Self::Empty => Err(anyhow::anyhow!(
+            Self::Empty => Err(eyre::anyhow!(
                 "Cannot login with Empty connection. Connect first!"
             )),
-            Self::Unregistered(_) => Err(anyhow::anyhow!(
+            Self::Unregistered(_) => Err(eyre::anyhow!(
                 "Cannot login with an unregistered connection, register first."
             )),
             Self::Active(ActiveConnection {
@@ -240,10 +240,10 @@ impl Connection {
         action: &str,
     ) -> Result<(&RpcServiceClient, ClientDataStore, (UserId, SessionToken))> {
         match self {
-            Self::Empty => Err(anyhow::anyhow!(
+            Self::Empty => Err(eyre::anyhow!(
                 "Cannot {action} with Empty connection. Connect first!"
             )),
-            Self::Unregistered(_) => Err(anyhow::anyhow!(
+            Self::Unregistered(_) => Err(eyre::anyhow!(
                 "Cannot {action} with an unregistered connection, register first."
             )),
             Self::Active(a) => {
@@ -254,7 +254,7 @@ impl Connection {
                 {
                     Ok((&a.service_client, a.db.clone(), (user_key, token)))
                 } else {
-                    Err(anyhow::anyhow!(
+                    Err(eyre::anyhow!(
                         "Cannot {action} with a connection that is not logged in, login first."
                     ))
                 }
@@ -302,8 +302,14 @@ impl Connection {
     /// Returns number of new messages.
     pub async fn download_all_messages(&self) -> Result<usize> {
         let (client, db, (_, token)) = self.with_active_guard("'download all messages'")?;
+        let last_known_message = db.messages(Pagination::last(1))?.focus.into_iter().next();
+
         let new_messages = client
-            .get_channel_messages(tarpc::context::current(), token, None)
+            .get_channel_messages(
+                tarpc::context::current(),
+                token,
+                last_known_message.map(|m| m.cursor),
+            )
             .instrument(info_span!("Asking server for ALL messages"))
             .await?
             .context("Error while talking to server")?;

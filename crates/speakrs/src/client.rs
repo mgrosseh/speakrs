@@ -16,8 +16,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0>.
  */
 use crate::common::config::{Config, config_home};
-use anyhow::Result;
 use clap::Parser;
+use eyre::Result;
 use std::{fmt::Debug, path::PathBuf};
 use systemaudio::SystemSettings;
 

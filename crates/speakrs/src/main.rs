@@ -21,11 +21,13 @@ mod schema;
 mod server;
 
 use clap::Parser;
+use tracing_error::ErrorLayer;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::common::{Arguments, config::config_home};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> eyre::Result<()> {
     let args = Arguments::parse();
 
     // TODO: make sure files dont get tooo big
@@ -39,7 +41,21 @@ async fn main() -> anyhow::Result<()> {
     } else {
         tracing_appender::non_blocking(tracing_appender::rolling::never(log_directory, log_file))
     };
-    tracing_subscriber::fmt().with_writer(non_blocking).init();
+
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(false)
+        .with_writer(non_blocking);
+
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer)
+        .with(ErrorLayer::default())
+        .init();
+    color_eyre::install()?;
 
     match args.command {
         common::Commands::Client(args) => client::run(args).await,

@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use anyhow::Result;
+use eyre::Result;
 use cpal::{
     Error, InputCallbackInfo, OutputCallbackInfo, Sample, SampleFormat, Stream, StreamConfig,
     platform::{Device, Host},

@@ -4,5 +4,6 @@
 /// It implements all the underlying pieces needed to define them, but doesn't assume their exact shape.
 pub mod codec;
 pub mod key;
+pub mod pagination;
 pub mod table;
 pub mod tree;

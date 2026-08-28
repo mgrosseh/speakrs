@@ -1,35 +1,39 @@
 use std::{
-    fs::File,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
 };
 
-use auth::{Permissions, authenticate_session, permission_guard, register_user};
-use server_schema::ServerDump;
-use speakrs_storage::{codec::Encodable, key::compound::ConsKey};
+use auth::{Permissions, authenticate_session, permission_guard};
+use speakrs_storage::pagination::{Page, Pagination};
 use tarpc::{
     context::Context,
-    server::{Channel, incoming::Incoming},
+    server::{Channel as _, incoming::Incoming as _},
     tokio_serde::formats::Json,
 };
 use tracing::info;
 
-use crate::common::{
-    self,
-    audio::AudioPacket,
-    auth::SessionToken,
-    config::{Config, config_home},
-    database::DB,
-    rpc::{RpcService, ServiceResult},
-    schema::{ChannelData, ChannelKey, MessageData, MessageKey, ServerInfoData, UserData, UserKey},
+use crate::{
+    common::{
+        self,
+        audio::AudioPacket,
+        config::{Config, config_home},
+        database::open_server_db,
+        rpc::{RpcService, ServiceResult},
+    },
+    schema::{
+        ServerDataStore,
+        channel::{Channel, ChannelId},
+        message::{Message, MessageId},
+        server::session::SessionToken,
+        server_info::ServerInfo,
+        user::{User, UserId},
+    },
 };
 
 use futures::{future, prelude::*};
 
 mod auth;
 pub use auth::AuthError;
-
-mod server_schema;
 
 #[derive(Debug, clap::Parser)]
 pub(crate) struct ServerArguments {
@@ -55,11 +59,12 @@ pub(crate) struct ServerArguments {
 }
 
 pub(crate) async fn run(args: ServerArguments) -> anyhow::Result<()> {
-    let db = DB::magic_open_server(args.name.to_string())?;
-    if let Some(path) = args.dump_db_to {
-        let dump = db.dump()?;
-        let file = File::create(path)?;
-        serde_json::to_writer_pretty(file, &dump)?;
+    let db = open_server_db(args.name.to_string())?;
+    if let Some(_path) = args.dump_db_to {
+        // TODO
+        // let dump = db.dump()?;
+        // let file = File::create(path)?;
+        // serde_json::to_writer_pretty(file, &dump)?;
         return Ok(());
     }
     command_server(args, db).await?;
@@ -103,157 +108,123 @@ impl ServerConfig {
 // ======================================
 // => RPC
 // ======================================
-// This is the type that implements the generated World trait. It is the business logic
-// and is used to start the server.
 #[derive(Clone)]
-struct HelloServer {
+struct RpcServer {
     #[allow(unused)] // TODO: consider if needed
     addr: SocketAddr,
-    db: DB,
+    db: ServerDataStore,
 }
 
-impl HelloServer {
-    pub fn new(addr: SocketAddr, db: DB) -> Self {
+impl RpcServer {
+    pub fn new(addr: SocketAddr, db: ServerDataStore) -> Self {
         Self { addr, db }
     }
 }
 
-impl common::rpc::RpcService for HelloServer {
-    async fn get_server_data(self, _: Context) -> ServiceResult<ServerInfoData> {
-        Ok(self.db.get_server_data()?)
+impl common::rpc::RpcService for RpcServer {
+    async fn get_server_data(self, _: Context) -> ServiceResult<ServerInfo> {
+        Ok(self.db.server_info()?)
     }
 
     async fn register_user(
         self,
         _: Context,
-        data: UserData,
+        name: String,
         password: String,
-    ) -> ServiceResult<UserKey> {
-        register_user(self.db, data, password)
+    ) -> ServiceResult<UserId> {
+        Ok(self.db.register_user(name, &password)?)
     }
     async fn authenticate_session(
         self,
         _: Context,
-        user: UserKey,
+        user: UserId,
         password: String,
     ) -> ServiceResult<SessionToken> {
-        authenticate_session(self.db, user, password)
+        authenticate_session(&self.db, user, password)
     }
 
-    async fn validate_session(self, _: Context, session: SessionToken) -> ServiceResult<bool> {
-        auth::validate_session(self.db, session)
+    async fn validate_session(self, _: Context, token: SessionToken) -> ServiceResult<bool> {
+        auth::validate_session(&self.db, token)
     }
 
-    async fn get_new_messages_since(
+    async fn get_channel_messages(
         self,
         _: Context,
         _session: SessionToken,
-        since: Option<MessageKey>,
-    ) -> ServiceResult<Vec<(MessageKey, MessageData)>> {
-        // TODO: permissions, pagination
-        Ok(if since.is_none() {
-            self.db
-                .messages()?
-                .range(..)
-                .decode()
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            self.db
-                .messages()?
-                .range(since.unwrap()..)
-                .decode()
-                .skip(1)
-                .collect::<Result<Vec<_>, _>>()?
-        })
+        since: Option<MessageId>,
+    ) -> ServiceResult<Page<Message, MessageId>> {
+        // TODO: permissions
+        Ok(self
+            .db
+            .messages(Pagination::last(100).opt_after(since))?
+            .focus)
     }
     async fn insert_message(
         self,
         _: Context,
         session: SessionToken,
-        channel: ChannelKey,
-        data: MessageData,
-    ) -> ServiceResult<MessageKey> {
+        channel: ChannelId,
+        content: String,
+    ) -> ServiceResult<MessageId> {
         permission_guard(
-            self.db.clone(),
+            &self.db,
             session,
             &[Permissions::CanWriteMessageIn(channel)],
         )?;
-        let messages = self.db.messages()?;
-        let relationship = self.db.messages_in_channel()?;
-
-        let message_id = MessageKey::new_now();
-        messages.insert(message_id, data.encode()?)?;
-        relationship.insert(ConsKey::new((channel, message_id)), ())?;
-        Ok(message_id)
+        let user = self.db.session(session)?.user;
+        Ok(self.db.add_message(Message::now(user, channel, content))?)
     }
     async fn get_message(
         self,
         _: Context,
         session: SessionToken,
-        key: MessageKey,
-    ) -> ServiceResult<Option<MessageData>> {
-        let message = self.db.messages()?.get_decoded(key)?;
-        if let Some(MessageData { channel, .. }) = message {
-            permission_guard(
-                self.db.clone(),
-                session,
-                &[Permissions::CanReadMessageIn(channel)],
-            )?;
-        }
-        Ok(message)
+        key: MessageId,
+    ) -> ServiceResult<Message> {
+        let message = self.db.message(key)?;
+        permission_guard(
+            &self.db,
+            session,
+            &[Permissions::CanReadMessageIn(message.channel)],
+        )?;
+        Ok(message.focus.node)
     }
 
     async fn get_user_info(
         self,
         _: Context,
         session: SessionToken,
-        key: UserKey,
-    ) -> ServiceResult<Option<UserData>> {
-        permission_guard(self.db.clone(), session, &[Permissions::CanSeeUser(key)])?;
-        Ok(self.db.users()?.get_decoded(key)?)
+        key: UserId,
+    ) -> ServiceResult<User> {
+        permission_guard(&self.db, session, &[Permissions::CanSeeUser(key)])?;
+        Ok(self.db.user(key)?.focus.node)
     }
 
     async fn create_channel(
         self,
         _: Context,
         session: SessionToken,
-        data: ChannelData,
-    ) -> ServiceResult<ChannelKey> {
-        permission_guard(self.db.clone(), session, &[Permissions::CanCreateChannel])?;
-        let channel_id = ChannelKey::new_now();
-        self.db.channels()?.insert(channel_id, data.encode()?)?;
-        Ok(channel_id)
+        data: Channel,
+    ) -> ServiceResult<ChannelId> {
+        permission_guard(&self.db, session, &[Permissions::CanCreateChannel])?;
+        Ok(self.db.add_channel(data)?)
     }
     async fn get_channel(
         self,
         _: Context,
         _session: SessionToken,
-        key: ChannelKey,
-    ) -> ServiceResult<Option<ChannelData>> {
-        Ok(self.db.channels()?.get_decoded(key)?)
+        key: ChannelId,
+    ) -> ServiceResult<Channel> {
+        Ok(self.db.channel(key)?.focus.node)
     }
-    async fn get_new_channels_since(
+    async fn get_channels(
         self,
         _: Context,
         _session: SessionToken,
-        since: Option<ChannelKey>,
-    ) -> ServiceResult<Vec<(ChannelKey, ChannelData)>> {
-        // TODO: permissions, pagination
+        pagination: Pagination<ChannelId>,
+    ) -> ServiceResult<Page<Channel, ChannelId>> {
+        // TODO: permissions
         // TODO: ideally there would be a per-channel basis on whether to allow receiving it
-        Ok(if since.is_none() {
-            self.db
-                .channels()?
-                .range(..)
-                .decode()
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            self.db
-                .channels()?
-                .range(since.unwrap()..)
-                .decode()
-                .skip(1)
-                .collect::<Result<Vec<_>, _>>()?
-        })
+        Ok(self.db.channels(pagination)?.focus)
     }
 
     async fn send_audio(
@@ -266,8 +237,8 @@ impl common::rpc::RpcService for HelloServer {
     }
 }
 
-#[tracing::instrument(skip(server))]
-async fn command_server(args: ServerArguments, server: DB) -> anyhow::Result<()> {
+#[tracing::instrument(skip(db))]
+async fn command_server(args: ServerArguments, db: ServerDataStore) -> anyhow::Result<()> {
     let server_addr = if args.ipv6 {
         (IpAddr::V6(Ipv6Addr::UNSPECIFIED), args.port)
     } else {
@@ -288,11 +259,11 @@ async fn command_server(args: ServerArguments, server: DB) -> anyhow::Result<()>
         .max_channels_per_key(1, |t| t.transport().peer_addr().unwrap().ip())
         // serve is generated by the service attribute. It takes as input any type implementing
         // the generated World trait.
-        .map(|channel| {
+        .map(move |channel| {
             let peer_addr = channel.transport().peer_addr().unwrap();
-            let server = HelloServer::new(peer_addr, server.clone());
+            let server = RpcServer::new(peer_addr, db.clone());
             info!("Peer connected from {peer_addr}");
-            channel.execute(server.serve()).for_each(|fut| async {
+            channel.execute(server.serve()).for_each(move |fut| async {
                 tokio::spawn(fut);
             })
         })

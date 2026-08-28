@@ -4,21 +4,31 @@ pub mod subscriber;
 use crate::{
     codec::Decodable,
     key::{DbKey, Prefixed},
+    pagination::{Edge, Page, Pagination, PaginationLimit},
     tree::subscriber::DBSubscriber,
 };
 
 use iter::TypedTreeIter;
 use sled::{
     IVec, Transactional, Tree,
-    transaction::{ConflictableTransactionResult, TransactionResult, TransactionalTree},
+    transaction::{
+        ConflictableTransactionError, ConflictableTransactionResult, TransactionError,
+        TransactionResult, TransactionalTree,
+    },
 };
 use sled::{Result as SledResult, transaction::UnabortableTransactionError};
-use std::{borrow::Borrow, marker::PhantomData, ops::RangeBounds};
+use std::{borrow::Borrow, fmt::Debug, marker::PhantomData, ops::RangeBounds};
 
 /// Thin abstraction over [`sled::Tree`] with strongly typed key and value.
 pub struct TypedTree<K, Encoded> {
     inner: Tree,
     marker: PhantomData<(K, Encoded)>,
+}
+
+impl<K, Encoded> Debug for TypedTree<K, Encoded> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TypedTree").finish()
+    }
 }
 
 impl<K, Encoded> Clone for TypedTree<K, Encoded> {
@@ -31,8 +41,7 @@ impl<K, Encoded> Clone for TypedTree<K, Encoded> {
 }
 
 impl<K, Encoded> TypedTree<K, Encoded> {
-    #[cfg(test)]
-    pub(super) fn open(db: &sled::Db, name: &str) -> sled::Result<Self> {
+    pub fn open(db: &sled::Db, name: &str) -> sled::Result<Self> {
         Ok(Self::from_raw(db.open_tree(name)?))
     }
 
@@ -59,14 +68,44 @@ impl<K, Encoded> TypedTree<K, Encoded> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum TreeError<Error> {
+pub enum TreeError {
     #[error(transparent)]
-    Sled(#[from] sled::Error),
+    Storage(#[from] sled::Error),
     #[error(transparent)]
-    Other(Error),
+    Other(#[from] anyhow::Error),
 }
 
-pub type TreeResult<T, E> = Result<T, TreeError<E>>;
+impl TreeError {
+    pub fn other(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl From<serde_json::Error> for TreeError {
+    fn from(value: serde_json::Error) -> Self {
+        TreeError::other(value)
+    }
+}
+
+impl<E: std::error::Error + Send + Sync + 'static> From<TransactionError<E>> for TreeError {
+    fn from(value: TransactionError<E>) -> Self {
+        match value {
+            TransactionError::Abort(error) => TreeError::Other(error.into()),
+            TransactionError::Storage(error) => TreeError::Storage(error),
+        }
+    }
+}
+
+impl From<TreeError> for ConflictableTransactionError<TreeError> {
+    fn from(value: TreeError) -> Self {
+        match value {
+            TreeError::Storage(error) => ConflictableTransactionError::Storage(error),
+            TreeError::Other(error) => ConflictableTransactionError::Abort(error.into()),
+        }
+    }
+}
+
+pub type TreeResult<T> = Result<T, TreeError>;
 
 impl<K, Encoded> TypedTree<K, Encoded>
 where
@@ -88,16 +127,6 @@ where
     /// Get a value corresponding to the key, or [`None`] if no value is present.
     pub fn get(&self, key: impl Borrow<K>) -> SledResult<Option<Encoded>> {
         self.inner.get(key.borrow()).map(Encoded::wrap_opt)
-    }
-
-    pub fn get_decoded(
-        &self,
-        key: impl Borrow<K>,
-    ) -> Result<Option<Encoded::Decoded>, TreeError<Encoded::DecodeError>> {
-        self.get(key)?
-            .map(|enc| enc.decode())
-            .transpose()
-            .map_err(TreeError::Other)
     }
 
     /// Inserts an already encoded key-value pair into the tree.
@@ -316,7 +345,7 @@ where
 
 impl<K, Encoded> TypedTree<K, Encoded>
 where
-    K: AsRef<[u8]> + From<IVec>,
+    K: DbKey,
 {
     /// Access a range of keys as an iterator.
     /// Keys are sorted by their bytes.
@@ -325,6 +354,52 @@ where
         TypedTreeIter {
             iter: self.inner.range(range),
             marker: PhantomData,
+        }
+    }
+
+    pub fn page(&self, pagination: Pagination<K>) -> TreeResult<Page<Encoded::Decoded, K>>
+    where
+        Encoded: Decodable,
+    {
+        self.page_mapped(pagination, |cursor, encoded| {
+            Ok(Edge {
+                node: encoded.decode().map_err(TreeError::other)?,
+                cursor,
+            })
+        })
+    }
+
+    pub fn page_mapped<T, K2>(
+        &self,
+        pagination: Pagination<K>,
+        mut mapper: impl FnMut(K, Encoded) -> TreeResult<Edge<T, K2>>,
+    ) -> TreeResult<Page<T, K2>>
+    where
+        Encoded: Decodable,
+    {
+        let mut range_iter = self.range((pagination.start, pagination.end));
+
+        let apply_mapper = move |res: sled::Result<(K, Encoded)>| {
+            let (k, encoded) = res?;
+            mapper(k, encoded)
+        };
+
+        match pagination.limit {
+            PaginationLimit::First(n) => {
+                let edges = range_iter.by_ref().take(n).map(apply_mapper);
+                Ok(Page {
+                    edges: edges.collect::<Result<_, _>>()?,
+                    has_next_page: range_iter.next().is_some(),
+                })
+            }
+            PaginationLimit::Last(n) => {
+                let mut reversed = range_iter.rev();
+                let edges = reversed.by_ref().take(n).map(apply_mapper);
+                Ok(Page {
+                    edges: edges.collect::<Result<_, _>>()?,
+                    has_next_page: reversed.next().is_some(),
+                })
+            }
         }
     }
 

@@ -19,12 +19,10 @@ where
     K: DbKey,
     Encoded: Decodable,
 {
-    pub fn decode(
-        self,
-    ) -> impl Iterator<Item = TreeResult<(K, Encoded::Decoded), Encoded::DecodeError>> {
+    pub fn decode(self) -> impl Iterator<Item = TreeResult<(K, Encoded::Decoded)>> {
         self.map(|result| {
             let (key, encoded) = result?;
-            let pair = (key, encoded.decode().map_err(TreeError::Other)?);
+            let pair = (key, encoded.decode().map_err(TreeError::other)?);
 
             Ok(pair)
         })

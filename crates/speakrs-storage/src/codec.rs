@@ -7,8 +7,8 @@ use sled::IVec;
 use crate::tree::{TreeError, TreeResult};
 
 pub trait DbValueCodec<T> {
-    type EncodeError: std::error::Error + Send + Sync + 'static;
-    type DecodeError: std::error::Error + Send + Sync + 'static;
+    type EncodeError: std::error::Error + Send + Sync + 'static + Into<anyhow::Error>;
+    type DecodeError: std::error::Error + Send + Sync + 'static + Into<anyhow::Error>;
 
     fn encode_ref(value: &T) -> Result<IVec, Self::EncodeError>;
     fn encode(value: T) -> Result<IVec, Self::EncodeError> {
@@ -60,9 +60,18 @@ pub struct EncodedValue<T, Codec> {
     pub marker: PhantomData<(T, Codec)>,
 }
 
+impl<T, Codec> Clone for EncodedValue<T, Codec> {
+    fn clone(&self) -> Self {
+        Self {
+            raw: self.raw.clone(),
+            marker: self.marker,
+        }
+    }
+}
+
 pub trait Decodable {
     type Decoded;
-    type DecodeError: std::error::Error + Send + Sync + 'static;
+    type DecodeError: std::error::Error + Send + Sync + 'static + Into<anyhow::Error>;
 
     fn into_raw(self) -> IVec;
 
@@ -129,7 +138,7 @@ where
 }
 
 pub trait Encodable<Encoded> {
-    type EncodeError: std::error::Error + Send + Sync + 'static;
+    type EncodeError: std::error::Error + Send + Sync + 'static + Into<anyhow::Error>;
     fn encode(self) -> Result<Encoded, Self::EncodeError>;
 }
 
@@ -202,23 +211,23 @@ impl<T> DecodeExt for Result<T, sled::Error>
 where
     T: Decodable,
 {
-    type DecodeResult = TreeResult<T::Decoded, T::DecodeError>;
+    type DecodeResult = TreeResult<T::Decoded>;
 
     fn decode(self) -> Self::DecodeResult {
-        Decodable::decode(self?).map_err(TreeError::Other)
+        Ok(Decodable::decode(self?).map_err(TreeError::other)?)
     }
 }
 impl<T> DecodeExt for Result<Option<T>, sled::Error>
 where
     T: Decodable,
 {
-    type DecodeResult = TreeResult<Option<T::Decoded>, T::DecodeError>;
+    type DecodeResult = TreeResult<Option<T::Decoded>>;
 
     fn decode(self) -> Self::DecodeResult {
         self?
             .map(Decodable::decode)
             .transpose()
-            .map_err(TreeError::Other)
+            .map_err(TreeError::other)
     }
 }
 

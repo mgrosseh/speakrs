@@ -1,13 +1,14 @@
-use speakrs_storage::codec::{Decodable, Encodable};
+use speakrs_storage::tree::TreeError;
 
-use crate::common::{
-    auth::{SessionData, SessionToken},
-    database::DB,
-    rpc::{ServiceError, ServiceResult},
-    schema::{ChannelKey, UserData, UserKey},
+use crate::{
+    common::rpc::{ServiceError, ServiceResult},
+    schema::{
+        ServerDataStore, SessionToken,
+        channel::ChannelId,
+        server::{session::Session, user_perms::UserPerms},
+        user::UserId,
+    },
 };
-
-use super::server_schema::{UserAuthData, UserPerms};
 
 #[derive(thiserror::Error, Debug, serde::Deserialize, serde::Serialize)]
 pub enum AuthError {
@@ -22,55 +23,40 @@ pub enum AuthError {
 }
 
 pub fn authenticate_session(
-    db: DB,
-    user: UserKey,
+    db: &ServerDataStore,
+    user: UserId,
     password: String,
 ) -> ServiceResult<SessionToken> {
-    let auth_data = db
-        .users_auth()?
-        .get(user)?
-        .ok_or(ServiceError::Auth(AuthError::NoSuchUser))?
-        .decode()?;
+    let auth_data = db.user_auth(user)?;
     if !auth_data.validate(&password) {
         return Err(ServiceError::Auth(AuthError::IncorrectPassword));
     }
-    register_token(db, user)
+    Ok(db.add_session(Session::new(user))?)
 }
 
-pub fn register_user(db: DB, data: UserData, password: String) -> ServiceResult<UserKey> {
-    // TODO: we might want to check if user already exists
-    // TODO: this being two steps introduces failure points!
-    let key = UserKey::new_now();
-    db.users()?.insert(key, data.encode()?)?;
-    db.users_auth()?
-        .insert(key, UserAuthData::from_password(&password).encode()?)?;
-    db.user_perms()?
-        .insert(key, UserPerms::default().encode()?)?;
-    Ok(key)
+fn validate_token(db: &ServerDataStore, token: SessionToken) -> ServiceResult<Session> {
+    let session = db.session(token).map_err(|err| match err {
+        TreeError::Storage(err) => ServiceError::from(err),
+        TreeError::Other(_) => ServiceError::Auth(AuthError::InvalidToken),
+    })?;
+    Ok(session.focus.node)
 }
 
-fn register_token(db: DB, user: UserKey) -> ServiceResult<SessionToken> {
-    let token = SessionToken::new_now();
-    db.client_sessions()?
-        .insert(token, SessionData::new(user).encode()?)?;
-    Ok(token)
-}
-
-fn validate_token(db: DB, token: SessionToken) -> ServiceResult<SessionData> {
-    if let Some(data) = db.client_sessions()?.get(token)? {
-        Ok(data.decode()?)
-    } else {
-        Err(ServiceError::Auth(AuthError::InvalidToken))
+pub fn validate_session(db: &ServerDataStore, token: SessionToken) -> ServiceResult<bool> {
+    match validate_token(db, token) {
+        Ok(_) => Ok(true),
+        Err(ServiceError::Auth(_)) => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
-pub fn validate_session(db: DB, session: SessionToken) -> ServiceResult<bool> {
-    Ok(db.client_sessions()?.get(session)?.is_some())
-}
-
-pub fn permission_guard(db: DB, token: SessionToken, perms: &[Permissions]) -> ServiceResult<()> {
-    let data = validate_token(db.clone(), token)?;
-    if !Permissions::check(perms, db, data.user)? {
+pub fn permission_guard(
+    db: &ServerDataStore,
+    token: SessionToken,
+    perms: &[Permissions],
+) -> ServiceResult<()> {
+    let data = validate_token(db, token)?;
+    if !Permissions::check(db, perms, data.user)? {
         Err(ServiceError::Auth(AuthError::InsufficientPerms))
     } else {
         Ok(())
@@ -80,9 +66,9 @@ pub fn permission_guard(db: DB, token: SessionToken, perms: &[Permissions]) -> S
 #[allow(unused)] // TODO
 pub enum Permissions {
     CanCreateChannel,
-    CanWriteMessageIn(ChannelKey),
-    CanReadMessageIn(ChannelKey),
-    CanSeeUser(UserKey),
+    CanWriteMessageIn(ChannelId),
+    CanReadMessageIn(ChannelId),
+    CanSeeUser(UserId),
 }
 
 impl Permissions {
@@ -91,14 +77,8 @@ impl Permissions {
         true // TODO poll database instead of allowing everything to everyone
     }
     /// TODO
-    pub fn check(perms: &[Permissions], db: DB, user: UserKey) -> ServiceResult<bool> {
-        Ok(db
-            .user_perms()?
-            .get(user)?
-            .map(Decodable::decode)
-            .transpose()?
-            .map_or(false, |user_perms| {
-                perms.iter().all(|p| p.is_allowed(&user_perms))
-            }))
+    pub fn check(db: &ServerDataStore, perms: &[Permissions], user: UserId) -> ServiceResult<bool> {
+        let user_perms = db.user_perms(user)?;
+        Ok(perms.iter().all(|p| p.is_allowed(&user_perms)))
     }
 }

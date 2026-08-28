@@ -13,13 +13,36 @@ pub struct ConsKey<Keys> {
     keys: Keys,
 }
 
+pub trait IntoConsKey<Cons> {
+    fn into_cons(self) -> Cons;
+}
+
+impl<Keys> IntoConsKey<ConsKey<Keys>> for ConsKey<Keys> {
+    fn into_cons(self) -> ConsKey<Keys> {
+        self
+    }
+}
+
+impl<Head> IntoConsKey<ConsKey<KCons<Head, KNil>>> for Head {
+    fn into_cons(self) -> ConsKey<KCons<Head, KNil>> {
+        ConsKey::of(self)
+    }
+}
+
 impl<PrefixKeys, Keys> Prefixed<ConsKey<PrefixKeys>> for ConsKey<Keys>
 where
     Keys: KeyListSplit<PrefixKeys> + Clone,
 {
+    type Suffix = ConsKey<Keys::Right>;
     fn prefix(&self) -> ConsKey<PrefixKeys> {
         ConsKey {
             keys: self.keys.clone().split().0,
+        }
+    }
+
+    fn suffix(&self) -> ConsKey<Keys::Right> {
+        ConsKey {
+            keys: self.keys.clone().split().1,
         }
     }
 }
@@ -30,6 +53,22 @@ impl<Keys> ConsKey<Keys> {
             keys: keys.into_list(),
         }
     }
+
+    pub fn join<PrefixKeys>(
+        prefix: impl IntoConsKey<ConsKey<PrefixKeys>>,
+        suffix: impl IntoConsKey<ConsKey<Keys::Right>>,
+    ) -> Self
+    where
+        Keys: KeyListSplit<PrefixKeys> + Clone,
+    {
+        ConsKey::new(Keys::join(prefix.into_cons().keys, suffix.into_cons().keys))
+    }
+}
+
+impl<Head, Tail: KList> ConsKey<KCons<Head, Tail>> {
+    pub fn tail(self) -> ConsKey<Tail> {
+        ConsKey::new(self.keys.tail)
+    }
 }
 
 impl<Head> ConsKey<KCons<Head, KNil>> {
@@ -37,6 +76,10 @@ impl<Head> ConsKey<KCons<Head, KNil>> {
         Self {
             keys: KNil.cons(head),
         }
+    }
+
+    pub fn single(self) -> Head {
+        self.keys.head
     }
 }
 
@@ -115,8 +158,18 @@ where
 }
 
 pub trait IntoKeyList {
-    type List: KeyList;
+    type List: KList;
     fn into_list(self) -> Self::List;
+}
+
+impl<T> IntoKeyList for T
+where
+    T: KList,
+{
+    type List = T;
+    fn into_list(self) -> Self::List {
+        self
+    }
 }
 
 macro_rules! impl_into_keys {
@@ -145,12 +198,12 @@ impl IntoKeyList for () {
 
 impl_into_keys!(A B C D E F G H I J);
 
-pub trait KeyList
+pub trait KList
 where
     Self: Sized,
 {
     fn cons<Head>(self, head: Head) -> KCons<Head, Self> {
-        KCons(head, self)
+        KCons { head, tail: self }
     }
 }
 
@@ -165,14 +218,18 @@ pub struct KNil;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroable, Pod)]
 #[repr(C, packed)]
-pub struct KCons<Head, Tail>(Head, Tail);
+pub struct KCons<Head, Tail> {
+    pub head: Head,
+    pub tail: Tail,
+}
 
-impl KeyList for KNil {}
-impl<Head, Tail> KeyList for KCons<Head, Tail> {}
+impl KList for KNil {}
+impl<Head, Tail> KList for KCons<Head, Tail> {}
 
-trait KeyListSplit<Left> {
+pub trait KeyListSplit<Left>: KList {
     type Right;
     fn split(self) -> (Left, Self::Right);
+    fn join(left: Left, right: Self::Right) -> Self;
 }
 
 impl<Head, Tail> KeyListSplit<KNil> for KCons<Head, Tail> {
@@ -181,18 +238,26 @@ impl<Head, Tail> KeyListSplit<KNil> for KCons<Head, Tail> {
     fn split(self) -> (KNil, Self::Right) {
         (KNil, self)
     }
+
+    fn join(_left: KNil, right: Self) -> Self {
+        right
+    }
 }
 
 impl<Head, Rest, Tail> KeyListSplit<KCons<Head, Rest>> for KCons<Head, Tail>
 where
-    Tail: KeyListSplit<Rest>,
-    Rest: KeyList,
+    Tail: KeyListSplit<Rest> + KList,
+    Rest: KList,
 {
     type Right = Tail::Right;
 
     fn split(self) -> (KCons<Head, Rest>, Self::Right) {
-        let (left, right) = self.1.split();
-        (left.cons(self.0), right)
+        let (left, right) = self.tail.split();
+        (left.cons(self.head), right)
+    }
+
+    fn join(left: KCons<Head, Rest>, right: Self::Right) -> Self {
+        Tail::join(left.tail, right).cons(left.head)
     }
 }
 
@@ -208,7 +273,7 @@ where
 {
     type Output = Tail::Output;
     fn fold(self, start: Start, mut f: F) -> Tail::Output {
-        self.1.fold(f.fold_impl(start, self.0), f)
+        self.tail.fold(f.fold_impl(start, self.head), f)
     }
 }
 

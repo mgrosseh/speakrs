@@ -4,15 +4,14 @@ use super::{
     notifications,
 };
 
-use crate::common::{
-    self,
-    config::config_home,
-    schema::{ChannelData, ChannelKey, MessageData, MessageKey, UserData},
+use crate::{
+    common::{self, config::config_home},
+    schema::channel::Channel,
 };
 use anyhow::Result;
 use linefeed::{Completion, Interface, ReadResult};
-use speakrs_storage::codec::IterDecodeExt;
-use std::fmt::Debug;
+use speakrs_storage::pagination::Pagination;
+use std::{fmt::Debug, usize};
 use std::{
     io::{self},
     sync::Arc,
@@ -110,11 +109,10 @@ pub fn fetch_all_channel_names() -> Result<Vec<String>> {
     }
     let db = connection.db();
     Ok(db
-        .channels()?
-        .values()
-        .decode()
-        .map(|res| res.map(|c| c.get_name().to_owned()))
-        .collect::<Result<Vec<String>, _>>()?)
+        .channels(Pagination::first(usize::MAX))?
+        .nodes()
+        .map(|c| c.get_name().to_owned())
+        .collect::<Vec<_>>())
 }
 
 const HISTORY_FILE: &str = "repl.history";
@@ -247,8 +245,11 @@ static COMMANDS: &CommandTree<ArgumentType> = &CommandTree(&[
             ),
             CommandTreeMember::binding_if(
                 "sync",
-                "Download ALL messages from server",
-                &[],
+                "Download channel messages from server",
+                &[CommandTreeArgument::Required(
+                    ArgumentType::ChannelName,
+                    "CHANNEL",
+                )],
                 repl_message_sync,
                 check_connection,
             ),
@@ -322,8 +323,8 @@ fn dump(args: String) -> JoinHandle<Result<()>> {
         if !arg_guard(rest) {
             return Ok(());
         }
-        let connection = clone_current_connection();
-        connection.dump_db_to(arg)?;
+        let _connection = clone_current_connection();
+        // connection.dump_db_to(arg)?;
         println!("Dumped db to `{arg}`");
 
         Ok(())
@@ -342,7 +343,7 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
         }
         info!("Creating connection to server...");
         let mut connection = Connection::connect_to_ip(arg).await?;
-        let info = connection.db().get_server_data()?;
+        let info = connection.db().server_info()?;
         info!("Found server `{}`", info.name);
         println!("Found server `{}`", info.name);
 
@@ -386,9 +387,8 @@ fn connect(args: String) -> JoinHandle<Result<()>> {
                     }
                 }
             }
-            let user_data = UserData::new(username.clone());
 
-            connection = connection.register_user(user_data, &password).await?;
+            connection = connection.register_user(&username, &password).await?;
             connection = connection.login(password).await?;
             let user_key = connection.session().user_key;
             println!("Created user {} with uuid {}.", username, user_key);
@@ -429,22 +429,11 @@ fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
         let connection = clone_current_connection();
         let db = connection.db().clone();
-        let user = connection.session().user_key;
         let (arg, rest) = split_first_word(&args);
         if args.is_empty() {
             println!("Expected CHANNEL_NAME arg.");
             return Ok(());
         }
-        let channel = db
-            .channels()?
-            .iter()
-            .decode()
-            .find_map(|kv| kv.ok().filter(|(_, v)| v.get_name() == arg));
-
-        let Some((channel_key, channel_data)) = channel else {
-            println!("Could not find channel with name {}.", arg);
-            return Ok(());
-        };
 
         let content = if !rest.trim().is_empty() {
             rest.to_string()
@@ -452,22 +441,29 @@ fn repl_message_add(args: String) -> JoinHandle<Result<()>> {
             println!(
                 "Enter message content (multiline). Send EOF or enter an empty line to confirm, ^C to cancel."
             );
-            let x = multiline_prompt("msg: ", |x| x.is_empty())?;
-            if x.is_none() {
+            let Some(x) = multiline_prompt("msg: ", |x| x.is_empty())? else {
                 println!("Cancelled. Did not send message.");
                 return Ok(());
-            }
-            x.unwrap().join("\n")
+            };
+            x.join("\n")
         };
-        let data = MessageData::now(user, channel_key, content);
 
-        let key = connection.send_message(channel_key, data.clone()).await?;
+        let Some(channel) = db
+            .channels(Pagination::first(usize::MAX))?
+            .focus
+            .into_iter()
+            .find(|ch| ch.get_name() == arg)
+        else {
+            println!("Could not find channel with name {}.", arg);
+            return Ok(());
+        };
+
+        let key = connection.send_message(channel.cursor, content).await?;
 
         println!(
-            "Created message at {} with key {} in channel \"{}\"",
-            data.timestamp,
+            "Created message with key {} in channel \"{}\"",
             key,
-            channel_data.get_name()
+            channel.get_name()
         );
         Ok(())
     })
@@ -495,14 +491,9 @@ fn repl_message_view(_args: String) -> JoinHandle<Result<()>> {
     // TODO: channels
     tokio::spawn(async move {
         let connection = clone_current_connection();
-        let channels = connection
-            .db()
-            .messages()?
-            .range(..)
-            .decode()
-            .collect::<Result<Vec<(MessageKey, MessageData)>, _>>()?;
-        for (_, value) in channels {
-            println!("Message `{}`: \"{}\"", value.author, value.content)
+        let channels = connection.db().messages(Pagination::first(usize::MAX))?;
+        for msg in channels.iter() {
+            println!("Message `{}`: \"{}\"", msg.author, msg.content)
         }
         Ok(())
     })
@@ -552,7 +543,7 @@ fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
             }
             x.unwrap().join("\n")
         };
-        let data = ChannelData::text(name.clone(), desc);
+        let data = Channel::text(name.clone(), desc);
 
         let key = clone_current_connection().add_channel(data).await?;
         println!("Created channel {} with uuid {}", name, key);
@@ -562,17 +553,13 @@ fn repl_channel_add(args: String) -> JoinHandle<Result<()>> {
 
 fn repl_channel_list(_args: String) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
-        let channels = clone_current_connection()
-            .db()
-            .channels()?
-            .range(..)
-            .decode()
-            .collect::<Result<Vec<(ChannelKey, ChannelData)>, _>>()?;
-        for (_, value) in channels {
+        let conn = clone_current_connection();
+        let channels = conn.db().channels(Pagination::first(usize::MAX))?;
+        for channel in channels.iter() {
             println!(
                 "Channel `{}`: \"{}\"",
-                value.get_name(),
-                value.get_description()
+                channel.get_name(),
+                channel.get_description()
             )
         }
         Ok(())

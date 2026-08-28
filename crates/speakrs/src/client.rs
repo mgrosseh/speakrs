@@ -27,7 +27,6 @@ pub mod repl;
 
 mod systemaudio;
 use cpal::traits::{DeviceTrait, StreamTrait};
-mod client_schema;
 
 #[derive(Debug, Parser)]
 pub(crate) struct ClientArguments {

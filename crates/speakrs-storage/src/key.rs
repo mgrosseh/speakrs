@@ -9,9 +9,11 @@ use sled::IVec;
 pub use uuid::UuidKey;
 
 pub trait Prefixed<P> {
+    type Suffix;
     // Currently only used in tests
     #[allow(unused)]
     fn prefix(&self) -> P;
+    fn suffix(&self) -> Self::Suffix;
 }
 
 pub trait DbKey: AsRef<[u8]> + From<IVec> + Into<IVec> {}

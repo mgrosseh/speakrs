@@ -1,23 +1,23 @@
-use crate::common::{
-    auth::SessionToken,
-    database::DB,
-    pagination::Pagination,
-    rpc::RpcServiceClient,
-    schema::{ChannelData, ChannelKey, MessageData, MessageKey, UserData, UserKey},
+use crate::{
+    common::{database::open_client_db, rpc::RpcServiceClient},
+    schema::{
+        ClientDataStore, SessionToken,
+        channel::{Channel, ChannelId},
+        client::client_session::ClientSession,
+        message::MessageId,
+        user::{User, UserId},
+    },
 };
 use anyhow::{Context, Result};
-use speakrs_storage::{codec::Encodable, key::compound::ConsKey};
+use speakrs_storage::pagination::{Edge, Pagination};
 use std::{
     fmt::Debug,
-    fs::File,
-    path::Path,
     sync::{OnceLock, RwLock},
+    usize,
 };
 use tarpc::tokio_serde::formats::Json;
 use tokio::net::ToSocketAddrs;
 use tracing::{Instrument, info_span};
-
-use super::client_schema::{ClientDump, ClientSession};
 
 #[derive(Debug, Clone)]
 pub enum Connection {
@@ -34,12 +34,12 @@ pub enum Connection {
 #[derive(Debug, Clone)]
 pub struct UnregisteredConnection {
     service_client: RpcServiceClient,
-    db: DB,
+    db: ClientDataStore,
 }
 #[derive(Debug, Clone)]
 pub struct ActiveConnection {
     service_client: RpcServiceClient,
-    db: DB,
+    db: ClientDataStore,
     client_session: ClientSession,
 }
 impl Connection {
@@ -66,7 +66,7 @@ impl Connection {
     }
     /// If `is_connected()` is true, this will return the database of this connection.
     /// Panics if `is_connected()` is false.
-    pub fn db(&self) -> &DB {
+    pub fn db(&self) -> &ClientDataStore {
         match self {
             Self::Empty => {
                 panic!("Connection: calling db() on Empty, always call has() first.")
@@ -75,14 +75,14 @@ impl Connection {
             Self::Active(connection) => &connection.db,
         }
     }
-    /// If [`Connection::is_connected()`] is true, this will dump the database of this connection to file specified by `path`.
-    /// Panics if [`Connection::is_connected()`] is false.
-    pub fn dump_db_to(&self, path: impl AsRef<Path>) -> Result<()> {
-        let dump = self.db().dump()?;
-        let file = File::create(path)?;
-        serde_json::to_writer_pretty(file, &dump)?;
-        Ok(())
-    }
+    // /// If [`Connection::is_connected()`] is true, this will dump the database of this connection to file specified by `path`.
+    // /// Panics if [`Connection::is_connected()`] is false.
+    // pub fn dump_db_to(&self, path: impl AsRef<Path>) -> Result<()> {
+    //     let dump = self.db().dump()?;
+    //     let file = File::create(path)?;
+    //     serde_json::to_writer_pretty(file, &dump)?;
+    //     Ok(())
+    // }
     /// If `is_registered()` is true, this will return the client session of this connection.
     pub fn session(&self) -> &ClientSession {
         match self {
@@ -110,11 +110,8 @@ impl Connection {
             .await?
             .context("Error while talking to server")?;
 
-        let db = DB::magic_open_client(data.name, data.uuid)?;
-        if let Some(client_session) = db
-            .get_client_session()
-            .context("Error while reading local database")?
-        {
+        let db = open_client_db(data)?;
+        if let Some(client_session) = db.current_session()?.focus {
             Ok(Self::Active(ActiveConnection {
                 service_client,
                 db,
@@ -132,7 +129,7 @@ impl Connection {
     /// This is only valid on an [`Connection::Unregistered`], otherwise will result in Err.
     /// Exchanges password with the server and on successful exchange, a session is created.
     /// Note that after this a [`Connection::login`] is required.
-    pub async fn register_user(self, user_data: UserData, password: &str) -> Result<Self> {
+    pub async fn register_user(self, username: &str, password: &str) -> Result<Self> {
         match self {
             Self::Empty => Err(anyhow::anyhow!(
                 "Cannot register with Empty connection. Connect first!"
@@ -145,7 +142,7 @@ impl Connection {
                 let user_key = service_client
                     .register_user(
                         tarpc::context::current(),
-                        user_data.clone(),
+                        username.to_owned(),
                         password.to_owned(),
                     )
                     .instrument(info_span!("Asking server for new user"))
@@ -156,9 +153,12 @@ impl Connection {
                     user_key,
                     token: None,
                 };
-                db.set_client_session(client_data.clone())
+                db.sync_users([Edge {
+                    node: User::new(username.to_owned()),
+                    cursor: user_key,
+                }])?;
+                db.set_current_session(client_data.clone())
                     .context("Error while writing to local database")?;
-                db.users()?.insert(user_key, user_data.encode()?)?;
                 Ok(Self::Active(ActiveConnection {
                     service_client,
                     db,
@@ -223,7 +223,7 @@ impl Connection {
                     user_key: user_key,
                     token: Some(token),
                 };
-                db.set_client_session(session.clone())
+                db.set_current_session(session.clone())
                     .context("Error while writing to local database")?;
 
                 Ok(Self::Active(ActiveConnection {
@@ -238,7 +238,7 @@ impl Connection {
     fn with_active_guard(
         &self,
         action: &str,
-    ) -> Result<(&RpcServiceClient, DB, (UserKey, SessionToken))> {
+    ) -> Result<(&RpcServiceClient, ClientDataStore, (UserId, SessionToken))> {
         match self {
             Self::Empty => Err(anyhow::anyhow!(
                 "Cannot {action} with Empty connection. Connect first!"
@@ -263,38 +263,38 @@ impl Connection {
     }
 
     /// Send a message to channel with `channel_key` with MessageData `message`, returning the MessageKey of the send message.
-    pub async fn send_message(
-        &self,
-        channel_key: ChannelKey,
-        message: MessageData,
-    ) -> Result<MessageKey> {
+    pub async fn send_message(&self, channel_key: ChannelId, content: String) -> Result<MessageId> {
         let (client, db, (_, token)) = self.with_active_guard("'send messages'")?;
+        let ctx = tarpc::context::current();
         let key = client
-            .insert_message(
-                tarpc::context::current(),
-                token,
-                channel_key,
-                message.clone(),
-            )
+            .insert_message(ctx, token, channel_key, content)
             .instrument(info_span!("Creating message in server"))
-            .await?
-            .context("Error while talking to server")?;
-        db.messages()?.insert(key, message.encode()?)?;
-        db.messages_in_channel()?
-            .insert(ConsKey::new((channel_key, key)), ())?;
+            .await??;
+
+        let message = client.get_message(ctx, token, key).await??;
+        db.sync_message(Edge {
+            node: message,
+            cursor: key,
+        })?;
         Ok(key)
     }
 
     /// Add a channel with `channel` data, returning the ChannelKey of the added channel.
-    pub async fn add_channel(&self, channel: ChannelData) -> Result<ChannelKey> {
+    pub async fn add_channel(&self, channel: Channel) -> Result<ChannelId> {
         let (client, db, (_, token)) = self.with_active_guard("'add channel'")?;
+        let ctx = tarpc::context::current();
         let key = client
-            .create_channel(tarpc::context::current(), token, channel.clone())
+            .create_channel(ctx, token, channel.clone())
             .instrument(info_span!("Creating channel in server"))
             .await?
             .context("Error while talking to server")?;
 
-        db.channels()?.insert(key, channel.encode()?)?;
+        let channel = client.get_channel(ctx, token, key).await??;
+
+        db.sync_channels([Edge {
+            node: channel,
+            cursor: key,
+        }])?;
         Ok(key)
     }
 
@@ -303,13 +303,13 @@ impl Connection {
     pub async fn download_all_messages(&self) -> Result<usize> {
         let (client, db, (_, token)) = self.with_active_guard("'download all messages'")?;
         let new_messages = client
-            .get_new_messages_since(tarpc::context::current(), token, None)
+            .get_channel_messages(tarpc::context::current(), token, None)
             .instrument(info_span!("Asking server for ALL messages"))
             .await?
             .context("Error while talking to server")?;
-        let len = new_messages.len();
-        for (key, data) in new_messages {
-            db.messages()?.insert(key, data.encode()?)?;
+        let len = new_messages.edges.len();
+        for edge in new_messages {
+            db.sync_message(edge)?;
         }
         Ok(len)
     }
@@ -318,25 +318,26 @@ impl Connection {
     /// Returns number of new channels.
     pub async fn download_all_channels(&self) -> Result<usize> {
         let (client, db, (_, token)) = self.with_active_guard("'download all channels'")?;
-        let last_known_channel = db.channels()?.last()?.map(|kv| kv.0);
+        let last_known_channel = db.channels(Pagination::last(1))?.focus.into_iter().next();
         let new_channels = client
-            .clone()
-            .get_new_channels_since(tarpc::context::current(), token, last_known_channel)
+            .get_channels(
+                tarpc::context::current(),
+                token,
+                Pagination::first(usize::MAX).opt_after(last_known_channel.map(|c| c.cursor)),
+            )
             .instrument(info_span!("Asking server for channel list"))
             .await?
             .context("Error while talking to server")?;
-        let len = new_channels.len();
-        for (key, data) in new_channels {
-            db.channels()?.insert(key, data.encode()?)?;
-        }
+        let len = new_channels.edges.len();
+        db.sync_channels(new_channels)?;
         Ok(len)
     }
 
     #[allow(unused)]
     pub async fn channel_messages(
         &self,
-        channel_key: ChannelKey,
-        pagination: Pagination<MessageKey>,
+        channel_key: ChannelId,
+        pagination: Pagination<MessageId>,
     ) -> Result<()> {
         todo!() // TODOa
     }

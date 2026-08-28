@@ -17,6 +17,7 @@
  */
 mod client;
 mod common;
+mod schema;
 mod server;
 
 use clap::Parser;

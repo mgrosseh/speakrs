@@ -28,12 +28,10 @@ pub const PROG_YEAR: &str = "2026";
 pub const PROG_AUTHORS: &str = "Miranda Große-Heilmann, Julie, Viki";
 
 pub mod audio;
-pub mod auth;
 pub mod config;
 pub mod database;
-pub mod pagination;
+pub mod lens;
 pub mod rpc;
-pub mod schema;
 
 // ======================================
 // => Run Arguments

@@ -1,7 +1,6 @@
 use super::{
     ClientArguments,
     connection::{Connection, clone_current_connection, current_connection},
-    notifications,
 };
 
 use crate::{

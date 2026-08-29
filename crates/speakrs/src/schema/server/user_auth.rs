@@ -1,6 +1,7 @@
 use blake2::{Blake2b, Digest, digest::consts::U32};
 use speakrs_storage::{
     codec::Encodable,
+    pagination::{Edge, Pagination},
     tree::{TreeResult, Tx},
 };
 
@@ -46,21 +47,40 @@ impl ServerDataStore {
             .decode()?)
     }
 
-    pub fn register_user(&self, name: String, password: &str) -> TreeResult<UserId> {
-        // TODO: Check if user already exists
-        let data = User::new(name);
+    pub fn get_user_by_name(&self, name: &str) -> TreeResult<Option<Edge<User>>> {
+        Ok(self
+            .users(Pagination::first(usize::MAX))?
+            .iter()
+            .find(|e| e.name == name)
+            .map(|e| e.clone()))
+    }
+
+    pub fn register_user(
+        &self,
+        name: &str,
+        password: &str,
+    ) -> TreeResult<Result<UserId, UserAlreadyExistsError>> {
+        if self.get_user_by_name(name)?.is_some() {
+            return Ok(Err(UserAlreadyExistsError(name.into())));
+        }
+        let data = User::new(name.into());
         let user_auth = UserAuth::from_password(password).encode()?;
         let user_perm = UserPerms::default().encode()?;
 
-        Ok(
-            Tx((&self.users, &self.side.users_auth, &self.side.user_perms)).transaction(
-                |(tx, auth, perm)| {
-                    let id = self.users.transact_add(tx, &data)?;
-                    auth.insert(id, user_auth.clone())?;
-                    perm.insert(id, user_perm.clone())?;
-                    Ok(id)
-                },
-            )?,
-        )
+        Ok(Ok(Tx((
+            &self.users,
+            &self.side.users_auth,
+            &self.side.user_perms,
+        ))
+        .transaction(|(tx, auth, perm)| {
+            let id = self.users.transact_add(tx, &data)?;
+            auth.insert(id, user_auth.clone())?;
+            perm.insert(id, user_perm.clone())?;
+            Ok(id)
+        })?))
     }
 }
+
+#[derive(thiserror::Error, Debug, serde::Deserialize, serde::Serialize)]
+#[error("User `{0}` already exists.")]
+pub struct UserAlreadyExistsError(String);

@@ -18,13 +18,13 @@ use crate::{
         audio::AudioPacket,
         config::{Config, config_home},
         database::open_server_db,
-        rpc::{RpcService, ServiceResult},
+        rpc::{RpcService, ServiceError, ServiceResult},
     },
     schema::{
         ServerDataStore,
         channel::{Channel, ChannelId},
         message::{Message, MessageId},
-        server::session::SessionToken,
+        server::{session::SessionToken, user_auth::UserAlreadyExistsError},
         server_info::ServerInfo,
         user::{User, UserId},
     },
@@ -113,19 +113,27 @@ impl ServerConfig {
 struct RpcServer {
     #[allow(unused)] // TODO: consider if needed
     addr: SocketAddr,
-    db: ServerDataStore,
+    store: ServerDataStore,
 }
 
 impl RpcServer {
-    pub fn new(addr: SocketAddr, db: ServerDataStore) -> Self {
-        Self { addr, db }
+    pub fn new(addr: SocketAddr, store: ServerDataStore) -> Self {
+        Self { addr, store }
     }
 }
 
 impl common::rpc::RpcService for RpcServer {
     #[tracing::instrument]
-    async fn get_server_data(self, _: Context) -> ServiceResult<ServerInfo> {
-        Ok(self.db.server_info()?)
+    async fn get_server_info(self, _: Context) -> ServiceResult<ServerInfo> {
+        Ok(self.store.server_info()?)
+    }
+
+    #[tracing::instrument]
+    async fn get_user_id_from_name(self, _: Context, name: String) -> ServiceResult<UserId> {
+        self.store
+            .get_user_by_name(&name)?
+            .map(|e| e.cursor)
+            .ok_or(ServiceError::Auth(AuthError::NoSuchUser))
     }
 
     #[tracing::instrument]
@@ -134,8 +142,8 @@ impl common::rpc::RpcService for RpcServer {
         _: Context,
         name: String,
         password: String,
-    ) -> ServiceResult<UserId> {
-        Ok(self.db.register_user(name, &password)?)
+    ) -> ServiceResult<Result<UserId, UserAlreadyExistsError>> {
+        Ok(self.store.register_user(&name, &password)?)
     }
     #[tracing::instrument]
     async fn authenticate_session(
@@ -144,11 +152,11 @@ impl common::rpc::RpcService for RpcServer {
         user: UserId,
         password: String,
     ) -> ServiceResult<SessionToken> {
-        authenticate_session(&self.db, user, password)
+        authenticate_session(&self.store, user, password)
     }
 
     async fn validate_session(self, _: Context, token: SessionToken) -> ServiceResult<bool> {
-        auth::validate_session(&self.db, token)
+        auth::validate_session(&self.store, token)
     }
 
     async fn get_channel_messages(
@@ -159,7 +167,7 @@ impl common::rpc::RpcService for RpcServer {
     ) -> ServiceResult<Page<Message, MessageId>> {
         // TODO: permissions
         Ok(self
-            .db
+            .store
             .messages(Pagination::last(100).opt_after(since))?
             .focus)
     }
@@ -171,12 +179,14 @@ impl common::rpc::RpcService for RpcServer {
         content: String,
     ) -> ServiceResult<MessageId> {
         permission_guard(
-            &self.db,
+            &self.store,
             session,
             &[Permissions::CanWriteMessageIn(channel)],
         )?;
-        let user = self.db.session(session)?.user;
-        Ok(self.db.add_message(Message::now(user, channel, content))?)
+        let user = self.store.session(session)?.user;
+        Ok(self
+            .store
+            .add_message(Message::now(user, channel, content))?)
     }
     async fn get_message(
         self,
@@ -184,9 +194,9 @@ impl common::rpc::RpcService for RpcServer {
         session: SessionToken,
         key: MessageId,
     ) -> ServiceResult<Message> {
-        let message = self.db.message(key)?;
+        let message = self.store.message(key)?;
         permission_guard(
-            &self.db,
+            &self.store,
             session,
             &[Permissions::CanReadMessageIn(message.channel)],
         )?;
@@ -199,8 +209,8 @@ impl common::rpc::RpcService for RpcServer {
         session: SessionToken,
         key: UserId,
     ) -> ServiceResult<User> {
-        permission_guard(&self.db, session, &[Permissions::CanSeeUser(key)])?;
-        Ok(self.db.user(key)?.focus.node)
+        permission_guard(&self.store, session, &[Permissions::CanSeeUser(key)])?;
+        Ok(self.store.user(key)?.focus.node)
     }
 
     async fn create_channel(
@@ -209,8 +219,8 @@ impl common::rpc::RpcService for RpcServer {
         session: SessionToken,
         data: Channel,
     ) -> ServiceResult<ChannelId> {
-        permission_guard(&self.db, session, &[Permissions::CanCreateChannel])?;
-        Ok(self.db.add_channel(data)?)
+        permission_guard(&self.store, session, &[Permissions::CanCreateChannel])?;
+        Ok(self.store.add_channel(data)?)
     }
     async fn get_channel(
         self,
@@ -218,7 +228,7 @@ impl common::rpc::RpcService for RpcServer {
         _session: SessionToken,
         key: ChannelId,
     ) -> ServiceResult<Channel> {
-        Ok(self.db.channel(key)?.focus.node)
+        Ok(self.store.channel(key)?.focus.node)
     }
     async fn get_channels(
         self,
@@ -228,7 +238,7 @@ impl common::rpc::RpcService for RpcServer {
     ) -> ServiceResult<Page<Channel, ChannelId>> {
         // TODO: permissions
         // TODO: ideally there would be a per-channel basis on whether to allow receiving it
-        Ok(self.db.channels(pagination)?.focus)
+        Ok(self.store.channels(pagination)?.focus)
     }
 
     async fn send_audio(

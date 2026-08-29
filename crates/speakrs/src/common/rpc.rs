@@ -11,6 +11,7 @@ use crate::{
         SessionToken,
         channel::{Channel, ChannelId},
         message::{Message, MessageId},
+        server::user_auth::UserAlreadyExistsError,
         server_info::ServerInfo,
         user::{User, UserId},
     },
@@ -22,10 +23,16 @@ use super::audio::AudioPacket;
 #[tarpc::service]
 pub trait RpcService {
     /// Get server name and uuid
-    async fn get_server_data() -> ServiceResult<ServerInfo>;
+    async fn get_server_info() -> ServiceResult<ServerInfo>;
+
+    /// Get user id from `username`
+    async fn get_user_id_from_name(name: String) -> ServiceResult<UserId>;
 
     /// Register a user with `data` and `password`, returning newly created `UserKey`.
-    async fn register_user(name: String, password: String) -> ServiceResult<UserId>;
+    async fn register_user(
+        name: String,
+        password: String,
+    ) -> ServiceResult<Result<UserId, UserAlreadyExistsError>>;
     async fn authenticate_session(user: UserId, password: String) -> ServiceResult<SessionToken>;
     /// Ensure `session` is valid currently.
     async fn validate_session(session: SessionToken) -> ServiceResult<bool>;

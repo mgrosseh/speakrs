@@ -42,6 +42,10 @@ impl<S> DataStore<S> {
     pub fn user(&self, id: UserId) -> LensResult<'_, Edge<User>, S> {
         Ok(self.lens(self.users.get_edge(id)?.ok_or(IdNotFound(id))?))
     }
+
+    pub fn users(&self, pagination: Pagination<UserId>) -> LensResult<'_, Page<User, UserId>, S> {
+        Ok(self.lens(self.users.page(pagination)?))
+    }
 }
 
 impl<'db, S> Lens<'db, Edge<User>, S> {

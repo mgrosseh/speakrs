@@ -105,7 +105,7 @@ impl Connection {
     pub async fn connect_to_ip(addr: impl ToSocketAddrs) -> Result<Connection> {
         let service_client = Connection::create_service_client(addr).await?;
         let data = service_client
-            .get_server_data(tarpc::context::current())
+            .get_server_info(tarpc::context::current())
             .instrument(info_span!("Asking server for server data"))
             .await?
             .wrap_err("Error while talking to server")?;
@@ -147,7 +147,7 @@ impl Connection {
                     )
                     .instrument(info_span!("Asking server for new user"))
                     .await?
-                    .wrap_err("Error while talking to server")?;
+                    .wrap_err("Error while talking to server")??;
 
                 let client_data = ClientSession {
                     user_key,

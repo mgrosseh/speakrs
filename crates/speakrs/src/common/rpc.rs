@@ -102,12 +102,6 @@ impl From<eyre::ErrReport> for ServiceError {
     }
 }
 
-// impl From<serde_json::Error> for ServiceError {
-//     fn from(value: serde_json::Error) -> Self {
-//         Self::SerdeJson(value.to_string())
-//     }
-// }
-
 impl From<TableOpenError> for ServiceError {
     fn from(value: TableOpenError) -> Self {
         Self::TableOpen(value.to_string())

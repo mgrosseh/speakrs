@@ -115,6 +115,7 @@ const HISTORY_FILE: &str = "repl.history";
 // TODO: use new COMMANDS system to show more useful help after mistyped command
 
 #[tracing::instrument]
+#[tokio::main]
 pub async fn repl(args: ClientArguments) -> Result<()> {
     let interface = Arc::new(Interface::new("speakrs")?);
 

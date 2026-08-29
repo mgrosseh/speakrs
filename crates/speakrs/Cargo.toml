@@ -21,13 +21,14 @@ tarpc = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 cpal = { version = "0.18.2", features = [
-	"asio",
-	"jack",
-	"pipewire",
-	"pulseaudio",
-	"realtime",
-	"realtime-dbus",
+  "asio",
+  "jack",
+  "pipewire",
+  "pulseaudio",
+  "realtime",
+  "realtime-dbus",
 ] }
+iced = { version = "0.14", features = [ "tokio" ] }
 ringbuf = "0.5.1"
 env = "1.0.1"
 toml = "1.1.4"

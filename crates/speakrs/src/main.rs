@@ -26,8 +26,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use crate::common::{Arguments, config::config_home};
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
+fn main() -> eyre::Result<()> {
     let args = Arguments::parse();
 
     // TODO: make sure files dont get tooo big
@@ -58,7 +57,7 @@ async fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
     match args.command {
-        common::Commands::Client(args) => client::run(args).await,
-        common::Commands::Server(args) => server::run(args).await,
+        common::Commands::Client(args) => client::run(args),
+        common::Commands::Server(args) => server::run(args),
     }
 }

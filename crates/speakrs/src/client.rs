@@ -27,19 +27,25 @@ pub mod repl;
 
 mod systemaudio;
 use cpal::traits::{DeviceTrait, StreamTrait};
+mod iced_gui;
 
 #[derive(Debug, Parser)]
 pub(crate) struct ClientArguments {
     /// With GUI, if false, runs TUI
     #[clap(long, default_value_t = false)]
     gui: bool,
+    /// With BAD GUI, if false (and good `gui` false), runs TUI
+    #[clap(long, default_value_t = false)]
+    bad_gui: bool,
 }
 
-pub(crate) async fn run(args: ClientArguments) -> Result<()> {
+pub(crate) fn run(args: ClientArguments) -> Result<()> {
     if args.gui {
         gui(args)
+    } else if args.bad_gui {
+        Ok(iced_gui::run(args)?)
     } else {
-        repl::repl(args).await
+        repl::repl(args)
     }
 }
 

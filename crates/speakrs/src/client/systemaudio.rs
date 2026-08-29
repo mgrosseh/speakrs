@@ -2,12 +2,12 @@
 
 use std::{sync::Arc, time::Duration};
 
-use eyre::Result;
 use cpal::{
     Error, InputCallbackInfo, OutputCallbackInfo, Sample, SampleFormat, Stream, StreamConfig,
     platform::{Device, Host},
     traits::{DeviceTrait, HostTrait},
 };
+use eyre::Result;
 use ringbuf::{
     HeapRb, SharedRb,
     traits::{Consumer, Producer, Split, SplitRef},

@@ -58,6 +58,7 @@ pub(crate) struct ServerArguments {
     dump_db_to: Option<String>,
 }
 
+#[tokio::main]
 pub(crate) async fn run(args: ServerArguments) -> eyre::Result<()> {
     let db = open_server_db(args.name.to_string())?;
     if let Some(_path) = args.dump_db_to {

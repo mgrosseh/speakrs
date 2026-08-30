@@ -228,10 +228,14 @@ impl<E, K, Encoded> Transactional<E> for &TypedTree<K, Encoded> {
 ///
 /// Usage:
 ///
-/// ```ignore
-/// Tx((&tree1, &tree2)).transaction(|(tx_tree1, tx_tree2|| {
-///    // ...
+/// ```
+/// # use speakrs_storage::tree::{Tx, TypedTree};
+/// # fn example(tree1: TypedTree<u32, ()>, tree2: TypedTree<u32, ()>) -> sled::transaction::TransactionResult<(), ()> {
+/// Tx((&tree1, &tree2)).transaction(|(tx_tree1, tx_tree2)| {
+///    // perform transaction operations
+///    Ok(())
 /// })
+/// # }
 /// ```
 pub struct Tx<TypedTrees>(pub TypedTrees);
 
@@ -360,6 +364,8 @@ where
     pub fn page(&self, pagination: Pagination<K>) -> TreeResult<Page<Encoded::Decoded, K>>
     where
         Encoded: Decodable,
+        Encoded: Debug,
+        K: Debug
     {
         self.page_mapped(pagination, |cursor, encoded| {
             Ok(Edge {
@@ -375,7 +381,8 @@ where
         mut mapper: impl FnMut(K, Encoded) -> TreeResult<Edge<T, K2>>,
     ) -> TreeResult<Page<T, K2>>
     where
-        Encoded: Decodable,
+        Encoded: Decodable + Debug,
+        K: Debug
     {
         let mut range_iter = self.range((pagination.start, pagination.end));
 

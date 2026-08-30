@@ -78,7 +78,6 @@ mod test {
         }
 
         let page = store.messages(Pagination::first(5))?;
-        assert_eq!(page.has_next_page, true);
 
         assert_eq!(
             page.nodes()
@@ -92,9 +91,9 @@ mod test {
                 "Some test message 4",
             ]
         );
+        assert_eq!(page.has_next_page, true);
 
-        let page = store.user(user2)?.messages(Pagination::first(8))?;
-        assert_eq!(page.has_next_page, false);
+        let page = store.user(user1)?.messages(Pagination::first(8))?;
         assert_eq!(
             page.nodes()
                 .map(|msg| msg.content.as_str())
@@ -107,6 +106,21 @@ mod test {
                 "Some test message 12",
             ]
         );
+        assert_eq!(page.has_next_page, false);
+
+        let page = store.user(user2)?.messages(Pagination::first(3))?;
+        assert_eq!(
+            page.nodes()
+                .map(|msg| msg.content.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Some test message 1",
+                "Some test message 2",
+                "Some test message 4",
+            ]
+        );
+        assert_eq!(page.has_next_page, true);
+
 
         Ok(())
     }

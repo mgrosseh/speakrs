@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  speakrs-bin:
 
     runs-on: ubuntu-latest
 

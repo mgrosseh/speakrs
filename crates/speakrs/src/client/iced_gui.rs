@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::sync::Arc;
 
 use crate::common::database::open_client_db;
 use crate::common::rpc::RpcServiceClient;
@@ -14,24 +15,256 @@ use tokio::net::ToSocketAddrs;
 use tracing::{Instrument, info_span, warn};
 
 pub fn run(_args: ClientArguments) -> iced::Result {
-    iced::application(Speakrs::new, Speakrs::update, Speakrs::view)
-        .theme(Speakrs::theme)
-        .run()
+    iced::application(
+        move || (Speakrs::new(), startup()),
+        Speakrs::update,
+        Speakrs::view,
+    )
+    .theme(Speakrs::theme)
+    .run()
+}
+
+fn startup() -> Task<Message> {
+    //let mut startup_task_chain = window::latest().map(Message::StartApp);
+    // startup_task_chain = startup_task_chain
+    // // do things
+    //     .chain(Task::done(Message::Start));
+    //startup_task_chain
+    Task::done(Message::Start)
 }
 
 enum State {
     Disconnected,
-    Connected(Connected),
+    Connected(ConnectionHandle),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RegisterLoginChoice {
+    Login,
+    Register,
+}
+impl Display for RegisterLoginChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Login => "Login",
+            Self::Register => "Register",
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
-struct Connected {
-    pub service: RpcServiceClient,
-    pub store: ClientDataStore,
-    pub logged_in: bool,
+enum Message {
+    Start,
+
+    Connect(ConnectionHandle),
+    LoginStatusChanged(bool),
+    DisplayError(String),
+
+    // Disconnected
+    ConnectButtonPressed,
+    IpFieldChanged(String),
+    // Connected | !logged_in
+    RegisterLoginChoiceSelected(RegisterLoginChoice),
+    LoginUsernameInputChanged(String),
+    LoginPasswordInputChanged(String),
+    LoginRegisterButtonPressed,
 }
-impl Connected {
-    async fn connect_to_ip(addr: impl ToSocketAddrs) -> Result<Connected> {
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginStatus {
+    Unknown,
+    LoggedIn,
+    LoggedOut,
+}
+
+pub struct Speakrs {
+    state: State,
+    login_status: LoginStatus,
+
+    // Disconnected:
+    ip_input: String,
+    // Connected | !logged_in
+    register_login_choice: Option<RegisterLoginChoice>,
+    login_username_input: String,
+    login_password_input: String,
+}
+
+impl Speakrs {
+    fn new() -> Self {
+        Self {
+            state: State::Disconnected,
+            login_status: LoginStatus::Unknown,
+            ip_input: "127.0.0.1:51777".into(),
+            register_login_choice: None,
+            login_username_input: "".into(),
+            login_password_input: "".into(),
+        }
+    }
+
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Start => return self.start(),
+            Message::IpFieldChanged(value) => self.ip_input = value,
+            Message::Connect(connection) => {
+                self.state = State::Connected(connection.clone());
+                return Task::perform(connection.check_login(), |value| match value {
+                    Ok(v) => Message::LoginStatusChanged(v),
+                    Err(e) => Message::DisplayError(e.to_string()),
+                });
+            }
+            Message::LoginStatusChanged(value) => match value {
+                true => self.login_status = LoginStatus::LoggedIn,
+                false => self.login_status = LoginStatus::LoggedOut,
+            },
+            Message::DisplayError(error) => warn!(error),
+            // Disconnected
+            Message::ConnectButtonPressed => match &self.state {
+                State::Disconnected => {
+                    return Task::perform(
+                        ConnectionController::connect_to_ip(self.ip_input.clone()),
+                        |connection| match connection {
+                            Ok(connection) => Message::Connect(connection),
+                            Err(e) => Message::DisplayError(format!("{:?}", e)),
+                        },
+                    );
+                }
+                State::Connected(_) => warn!("Attempted to connect in Connected state. Ignoring."),
+            },
+            // Connected | !logged_in
+            Message::RegisterLoginChoiceSelected(choice) => {
+                self.register_login_choice = Some(choice)
+            }
+            Message::LoginPasswordInputChanged(password) => self.login_password_input = password,
+            Message::LoginUsernameInputChanged(username) => self.login_username_input = username,
+            Message::LoginRegisterButtonPressed => {
+                match &self.state {
+                    State::Connected(connection) => {
+                        match self.register_login_choice {
+                            Some(RegisterLoginChoice::Login) => {
+                                return Task::perform(
+                                    connection.clone().login(
+                                        self.login_username_input.clone(),
+                                        self.login_password_input.clone(),
+                                    ),
+                                    |result| match result {
+                                        Ok(_) => Message::LoginStatusChanged(true),
+                                        Err(e) => Message::DisplayError(e.to_string()),
+                                    },
+                                );
+                            }
+                            Some(RegisterLoginChoice::Register) => {
+                                return Task::perform(
+                                    connection.clone().register_login(
+                                        self.login_username_input.clone(),
+                                        self.login_password_input.clone(),
+                                    ),
+                                    |result| match result {
+                                        Ok(_) => Message::LoginStatusChanged(true),
+                                        Err(e) => Message::DisplayError(e.to_string()),
+                                    },
+                                );
+                            }
+                            None => warn!(
+                                "Clicked login/register button without selecting register or login. Ignoring."
+                            ), // TODO tell user this
+                        }
+                    }
+                    _ => warn!("Attempted to login in Disconnected state. Ignoring."),
+                }
+            }
+        }
+        Task::none()
+    }
+
+    fn view(&self) -> Element<'_, Message> {
+        match &self.state {
+            State::Disconnected => {
+                let title = text("Speakrs");
+
+                let connection_header = text("Connect to server IP");
+                let ip_field = text_input("000.000.000.000:00000", &self.ip_input)
+                    .on_input(Message::IpFieldChanged)
+                    .padding(10);
+
+                let connect_button = button("Connect").on_press(Message::ConnectButtonPressed);
+                let connection_ui =
+                    column![row![connection_header], row![ip_field, connect_button]];
+
+                let ui = column![row![title], row![connection_ui]];
+
+                ui.into()
+            }
+            State::Connected(connection) if self.login_status == LoginStatus::LoggedOut => {
+                let title = text("Speakrs");
+                let info = text("No session was found, you need to log in or register.");
+
+                let header = text("Log in or Register");
+
+                let username_label = text("Username:");
+                let username_field = text_input("", &self.login_username_input)
+                    .on_input(Message::LoginUsernameInputChanged)
+                    .padding(10);
+                let password_label = text("Password:");
+                let password_field = text_input("", &self.login_password_input)
+                    .on_input(Message::LoginPasswordInputChanged)
+                    .padding(10);
+                let register_login_choice = pick_list(
+                    [RegisterLoginChoice::Login, RegisterLoginChoice::Register],
+                    self.register_login_choice,
+                    Message::RegisterLoginChoiceSelected,
+                );
+                let login_button = button("Connect").on_press(Message::LoginRegisterButtonPressed);
+
+                let ui = column![
+                    title,
+                    info,
+                    column![
+                        header,
+                        row![username_label, username_field],
+                        row![password_label, password_field],
+                        row![register_login_choice, login_button]
+                    ]
+                ];
+
+                ui.into()
+            }
+            State::Connected(_connection) => text("Connected!").into(), // TODO: handle LoginStatus::Unknown
+        }
+    }
+
+    fn theme(&self) -> Theme {
+        Theme::Dracula
+    }
+
+    fn start(&mut self) -> Task<Message> {
+        Task::none()
+    }
+}
+
+type ConnectionHandle = Arc<ConnectionController>;
+#[derive(Debug)]
+struct ConnectionController {
+    service: RpcServiceClient,
+    store: ClientDataStore,
+}
+impl ConnectionController {
+    async fn check_login(self: Arc<Self>) -> Result<bool> {
+        if let Some(ClientSession {
+            token: Some(token), ..
+        }) = self.store.current_session()?.focus
+        {
+            Ok(self
+                .service
+                .validate_session(tarpc::context::current(), token)
+                .instrument(info_span!("Validating stored session"))
+                .await?
+                .wrap_err("Error while talking to server")?)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn connect_to_ip(addr: impl ToSocketAddrs) -> Result<ConnectionHandle> {
         let mut transport = tarpc::serde_transport::tcp::connect(addr, Json::default);
         transport.config_mut().max_frame_length(usize::MAX);
         let service =
@@ -43,25 +276,10 @@ impl Connected {
             .wrap_err("Error while talking to server")?;
 
         let store = open_client_db(data)?;
-        let mut logged_in = false;
-        if let Some(ClientSession {
-            token: Some(token), ..
-        }) = store.current_session()?.focus
-        {
-            logged_in = service
-                .validate_session(tarpc::context::current(), token)
-                .instrument(info_span!("Validating stored session"))
-                .await?
-                .wrap_err("Error while talking to server")?;
-        }
-        Ok(Connected {
-            service,
-            logged_in,
-            store,
-        })
+        Ok(Arc::new(ConnectionController { service, store }))
     }
 
-    pub async fn register_login(self, username: String, password: String) -> Result<()> {
+    pub async fn register_login(self: Arc<Self>, username: String, password: String) -> Result<()> {
         let user_key = self
             .service
             .register_user(
@@ -107,7 +325,7 @@ impl Connected {
         Ok(())
     }
 
-    pub async fn login(&self, username: String, password: String) -> Result<()> {
+    pub async fn login(self: Arc<Self>, username: String, password: String) -> Result<()> {
         let session = match self.store.current_session()?.focus {
             Some(session) => session,
             None => {
@@ -124,183 +342,5 @@ impl Connected {
             }
         };
         self.login_internal(session, &password).await
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RegisterLoginChoice {
-    Login,
-    Register,
-}
-impl Display for RegisterLoginChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Login => "Login",
-            Self::Register => "Register",
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-enum Message {
-    Noop,
-    Connect(Connected),
-    DisplayError(String),
-
-    // Disconnected
-    ConnectButtonPressed,
-    IpFieldChanged(String),
-    // Connected | !logged_in
-    RegisterLoginChoiceSelected(RegisterLoginChoice),
-    LoginUsernameInputChanged(String),
-    LoginPasswordInputChanged(String),
-    LoginRegisterButtonPressed,
-}
-
-pub struct Speakrs {
-    state: State,
-
-    // Disconnected:
-    ip_input: String,
-    // Connected | !logged_in
-    register_login_choice: Option<RegisterLoginChoice>,
-    login_username_input: String,
-    login_password_input: String,
-}
-
-impl Speakrs {
-    fn new() -> Self {
-        Self {
-            state: State::Disconnected,
-            ip_input: "127.0.0.1:51777".into(),
-            register_login_choice: None,
-            login_username_input: "".into(),
-            login_password_input: "".into(),
-        }
-    }
-
-    fn update(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::Noop => (),
-            Message::IpFieldChanged(value) => self.ip_input = value,
-            Message::Connect(connection) => self.state = State::Connected(connection),
-            Message::DisplayError(error) => warn!(error),
-            // Disconnected
-            Message::ConnectButtonPressed => match &self.state {
-                State::Disconnected => {
-                    return Task::perform(
-                        Connected::connect_to_ip(self.ip_input.clone()),
-                        |connection| match connection {
-                            Ok(connection) => Message::Connect(connection),
-                            Err(e) => Message::DisplayError(format!("{:?}", e)),
-                        },
-                    );
-                }
-                _ => warn!("Attempted to connect in Disconnected state. Ignoring."),
-            },
-            // Connected | !logged_in
-            Message::RegisterLoginChoiceSelected(choice) => {
-                self.register_login_choice = Some(choice)
-            }
-            Message::LoginPasswordInputChanged(password) => self.login_password_input = password,
-            Message::LoginUsernameInputChanged(username) => self.login_username_input = username,
-            Message::LoginRegisterButtonPressed => {
-                match &self.state {
-                    State::Connected(connection) => {
-                        match self.register_login_choice {
-                            Some(RegisterLoginChoice::Login) => {
-                                let connection = connection.clone();
-                                let username = self.login_username_input.clone();
-                                let password = self.login_password_input.clone();
-                                return Task::perform(
-                                    async move { connection.login(username, password).await },
-                                    |result| match result {
-                                        Ok(_) => Message::Noop,
-                                        Err(e) => Message::DisplayError(format!("{:?}", e)),
-                                    },
-                                );
-                            }
-                            Some(RegisterLoginChoice::Register) => {
-                                return Task::perform(
-                                    connection.clone().register_login(
-                                        self.login_username_input.clone(),
-                                        self.login_password_input.clone(),
-                                    ),
-                                    |result| match result {
-                                        Ok(_) => Message::Noop,
-                                        Err(e) => Message::DisplayError(format!("{:?}", e)),
-                                    },
-                                );
-                            }
-                            None => warn!(
-                                "Clicked login/register button without selecting register or login. Ignoring."
-                            ), // TODO
-                        }
-                    }
-                    _ => warn!("Attempted to login in Disconnected state. Ignoring."),
-                }
-            }
-        }
-        Task::none()
-    }
-
-    fn view(&self) -> Element<'_, Message> {
-        match &self.state {
-            State::Disconnected => {
-                let title = text("Speakrs");
-
-                let connection_header = text("Connect to server IP");
-                let ip_field = text_input("000.000.000.000:00000", &self.ip_input)
-                    .on_input(Message::IpFieldChanged)
-                    .padding(10);
-
-                let connect_button = button("Connect").on_press(Message::ConnectButtonPressed);
-                let connection_ui =
-                    column![row![connection_header], row![ip_field, connect_button]];
-
-                let ui = column![row![title], row![connection_ui]];
-
-                ui.into()
-            }
-            State::Connected(connection) if !connection.logged_in => {
-                let title = text("Speakrs");
-                let info = text("No session was found, you need to log in or register.");
-
-                let header = text("Log in or Register");
-
-                let username_label = text("Username:");
-                let username_field = text_input("", &self.login_username_input)
-                    .on_input(Message::LoginUsernameInputChanged)
-                    .padding(10);
-                let password_label = text("Password:");
-                let password_field = text_input("", &self.login_password_input)
-                    .on_input(Message::LoginPasswordInputChanged)
-                    .padding(10);
-                let register_login_choice = pick_list(
-                    [RegisterLoginChoice::Login, RegisterLoginChoice::Register],
-                    self.register_login_choice,
-                    Message::RegisterLoginChoiceSelected,
-                );
-                let login_button = button("Connect").on_press(Message::LoginRegisterButtonPressed);
-
-                let ui = column![
-                    title,
-                    info,
-                    column![
-                        header,
-                        row![username_label, username_field],
-                        row![password_label, password_field],
-                        row![register_login_choice, login_button]
-                    ]
-                ];
-
-                ui.into()
-            }
-            State::Connected(_connection) => todo!(),
-        }
-    }
-
-    fn theme(&self) -> Theme {
-        Theme::Dracula
     }
 }

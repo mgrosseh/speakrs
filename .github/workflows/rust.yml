@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "gtk" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "gtk" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,12 +15,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v4
-      with: 
-        host: linux
-        target: desktop
-        arch: linux_gcc_64
     - uses: actions/checkout@v4
     - name: install pipewire
       run: |

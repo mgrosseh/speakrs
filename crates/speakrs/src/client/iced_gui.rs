@@ -7,9 +7,9 @@ use crate::schema::{ClientDataStore, client::client_session::ClientSession, user
 
 use super::ClientArguments;
 use eyre::{Result, ResultExt};
-use iced::widget::{button, column, pick_list, row, text, text_input};
+use iced::widget::{Column, button, column, pick_list, row, scrollable, text, text_input};
 use iced::{Element, Task, Theme};
-use speakrs_storage::pagination::Edge;
+use speakrs_storage::pagination::{Edge, Pagination};
 use tarpc::tokio_serde::formats::Json;
 use tokio::net::ToSocketAddrs;
 use tracing::{Instrument, info_span, warn};
@@ -25,6 +25,7 @@ pub fn run(_args: ClientArguments) -> iced::Result {
 }
 
 fn startup() -> Task<Message> {
+    // Ex.  using multiple tasks doing startup for a specific window, e.g. use iced::daemon
     //let mut startup_task_chain = window::latest().map(Message::StartApp);
     // startup_task_chain = startup_task_chain
     // // do things
@@ -194,41 +195,79 @@ impl Speakrs {
 
                 ui.into()
             }
-            State::Connected(connection) if self.login_status == LoginStatus::LoggedOut => {
+            State::Connected(connection) => {
                 let title = text("Speakrs");
-                let info = text("No session was found, you need to log in or register.");
+                match self.login_status {
+                    LoginStatus::LoggedOut => {
+                        let info = text("No session was found, you need to log in or register.");
 
-                let header = text("Log in or Register");
+                        let header = text("Log in or Register");
 
-                let username_label = text("Username:");
-                let username_field = text_input("", &self.login_username_input)
-                    .on_input(Message::LoginUsernameInputChanged)
-                    .padding(10);
-                let password_label = text("Password:");
-                let password_field = text_input("", &self.login_password_input)
-                    .on_input(Message::LoginPasswordInputChanged)
-                    .padding(10);
-                let register_login_choice = pick_list(
-                    [RegisterLoginChoice::Login, RegisterLoginChoice::Register],
-                    self.register_login_choice,
-                    Message::RegisterLoginChoiceSelected,
-                );
-                let login_button = button("Connect").on_press(Message::LoginRegisterButtonPressed);
+                        let username_label = text("Username:");
+                        let username_field = text_input("", &self.login_username_input)
+                            .on_input(Message::LoginUsernameInputChanged)
+                            .padding(10);
+                        let password_label = text("Password:");
+                        let password_field = text_input("", &self.login_password_input)
+                            .on_input(Message::LoginPasswordInputChanged)
+                            .padding(10);
+                        let register_login_choice = pick_list(
+                            [RegisterLoginChoice::Login, RegisterLoginChoice::Register],
+                            self.register_login_choice,
+                            Message::RegisterLoginChoiceSelected,
+                        );
+                        let login_button =
+                            button("Connect").on_press(Message::LoginRegisterButtonPressed);
 
-                let ui = column![
-                    title,
-                    info,
-                    column![
-                        header,
-                        row![username_label, username_field],
-                        row![password_label, password_field],
-                        row![register_login_choice, login_button]
-                    ]
-                ];
+                        let ui = column![
+                            title,
+                            info,
+                            column![
+                                header,
+                                row![username_label, username_field],
+                                row![password_label, password_field],
+                                row![register_login_choice, login_button]
+                            ]
+                        ];
 
-                ui.into()
+                        ui.into()
+                    }
+                    LoginStatus::Unknown => {
+                        text("Error. Unknown login state after trying to connect, this is a bug.")
+                            .into()
+                    }
+                    LoginStatus::LoggedIn => {
+                        let server_info_ui = if let Ok(info) = connection.store.server_info() {
+                            text(info.name)
+                        } else {
+                            text("Failed loading server info from local data store!")
+                        };
+
+                        let channel_list_ui = if let Ok(x) =
+                            connection.store.channels(Pagination::first(usize::MAX))
+                        {
+                            let y = Column::with_children(
+                                x.focus
+                                    .edges
+                                    .iter()
+                                    .map(|e| Element::from(e.node.get_name())),
+                            );
+
+                            scrollable(y)
+                        } else {
+                            text("Failed loading channel list")
+                        };
+
+                        let ui = column![
+                            title,
+                            server_info_ui,
+                            row![channel_list_ui, active_channel_ui,]
+                        ];
+
+                        ui.into()
+                    }
+                }
             }
-            State::Connected(_connection) => text("Connected!").into(), // TODO: handle LoginStatus::Unknown
         }
     }
 

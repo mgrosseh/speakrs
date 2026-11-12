@@ -121,7 +121,6 @@ mod test {
         );
         assert_eq!(page.has_next_page, true);
 
-
         Ok(())
     }
 

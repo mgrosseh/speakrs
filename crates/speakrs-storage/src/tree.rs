@@ -365,7 +365,7 @@ where
     where
         Encoded: Decodable,
         Encoded: Debug,
-        K: Debug
+        K: Debug,
     {
         self.page_mapped(pagination, |cursor, encoded| {
             Ok(Edge {
@@ -382,7 +382,7 @@ where
     ) -> TreeResult<Page<T, K2>>
     where
         Encoded: Decodable + Debug,
-        K: Debug
+        K: Debug,
     {
         let mut range_iter = self.range((pagination.start, pagination.end));
 

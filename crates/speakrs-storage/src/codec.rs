@@ -62,7 +62,9 @@ pub struct EncodedValue<T, Codec> {
 
 impl<T, Codec> std::fmt::Debug for EncodedValue<T, Codec> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("EncodedValue").field(&self.raw.len()).finish()
+        f.debug_tuple("EncodedValue")
+            .field(&self.raw.len())
+            .finish()
     }
 }
 

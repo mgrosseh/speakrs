@@ -4,5 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+gtk = { version = "0.11.5", package = "gtk4", features = ["v4_24"] }
+tracing = { workspace = true }
+eyre = { workspace = true }
+color-eyre = { workspace = true }
 
 [build-dependencies]

@@ -50,9 +50,8 @@ pub(crate) fn run(args: ClientArguments) -> Result<()> {
 }
 
 fn gui(_args: ClientArguments) -> Result<()> {
-    tracing::info!("{:?}", audio_feedback_test()); // TODO replace with actual Sound Interface for vc, video, ui sounds
-    speakrs_gui::run();
-    return Ok(());
+    //tracing::info!("{:?}", audio_feedback_test()); // TODO replace with actual Sound Interface for vc, video, ui sounds
+    speakrs_gui::run()
 }
 
 fn audio_feedback_test() -> Result<()> {

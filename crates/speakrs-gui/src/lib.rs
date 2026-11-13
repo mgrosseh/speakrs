@@ -68,6 +68,9 @@ fn build_ui(app: &Application) {
         .margin_end(12)
         .build();
 
+    let settings_box = gtk::ListBox::builder()
+        .build();
+
     main_box.append(&title_bar_box);
     title_bar_box.append(&settings_button);
     title_bar_box.append(&info_button);
@@ -105,4 +108,19 @@ fn build_ui(app: &Application) {
         .build();
 
     window.present();
+
+    let settings_box_label = gtk::Label::builder()
+        .label("Settings")
+        .selectable(false)
+        .build();
+
+    settings_box.append(&settings_box_label);
+
+    let settings_window = ApplicationWindow::builder()
+        .application(app)
+        .title("SpeakRS Settings")
+        .child(&settings_box)
+        .build();
+
+    settings_button.connect_clicked(move |_| settings_window.present());
 }
